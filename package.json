@@ -7,11 +7,9 @@
   "author": "BYU Web Community",
   "license": "Apache-2.0",
   "scripts": {
-    "build": "webpack"
+    "build": "cp -- node_modules/webcomponents.js/webcomponents-*.js* dist"
   },
   "dependencies": {
-    "skatejs-build": "^12.2.0",
-    "skatejs-web-components": "^5.0.0",
-    "webpack": "^1.0.0"
+    "webcomponents.js": "github:webcomponents/webcomponentsjs"
   }
 }
