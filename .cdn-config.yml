@@ -4,5 +4,8 @@ description: Bundle of web component polyfills for IE 11+
 resources:
   - src: dist/**
     dest: ./
+entrypoints:
+  web-component-polyfills.js: "Bundle of all Web Component polyfills"
+  web-component-polyfills.min.js: "Minified bundle of all Web Component polyfills"
 latest-only: true
 docs: https://github.com/byuweb/web-component-polyfills
