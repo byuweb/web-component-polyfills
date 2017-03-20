@@ -7,9 +7,12 @@
   "author": "BYU Web Community",
   "license": "Apache-2.0",
   "scripts": {
-    "build": "cp -- node_modules/webcomponents.js/webcomponents-*.js* dist"
+    "build": "cp -- node_modules/@skatejs/web-components/umd/@skatejs/web-components.* dist"
   },
   "dependencies": {
-    "webcomponents.js": "github:webcomponents/webcomponentsjs"
+    "@skatejs/web-components": "^1.0.0"
+  },
+  "devDependencies": {
+    "cp": "^0.2.0"
   }
 }
