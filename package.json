@@ -7,12 +7,14 @@
   "author": "BYU Web Community",
   "license": "Apache-2.0",
   "scripts": {
-    "build": "cp -- node_modules/@skatejs/web-components/umd/@skatejs/web-components.* dist"
+    "build": "node copy-polyfills.js"
   },
   "dependencies": {
-    "@skatejs/web-components": "^1.0.0"
+    "skatejs-web-components": "^5.2.0"
   },
   "devDependencies": {
-    "cp": "^0.2.0"
+    "fs-extra-p": "^4.1.0",
+    "klaw-sync": "^1.1.2",
+    "replace-in-file": "^2.5.0"
   }
 }
