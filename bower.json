@@ -1,0 +1,26 @@
+{
+  "name": "byu-web-component-polyfills",
+  "description": "Component Polyfills (custom elements and shadow/shady DOM)",
+  "main": "index.js",
+  "authors": [
+    "BYU Web Community"
+  ],
+  "license": "Apache-2.0",
+  "homepage": "https://github.com/byuweb/web-component-polyfills",
+  "ignore": [
+    "**/.*",
+    "node_modules",
+    "bower_components",
+    "test",
+    "tests"
+  ],
+  "dependencies": {
+    "custom-elements": "webcomponents/custom-elements#^1.0.0-rc.2",
+    "shadycss": "webcomponents/shadycss#^1.0.0-rc.2",
+    "shadydom": "webcomponents/shadydom#^1.0.0-rc.2",
+    "webcomponents-platform": "webcomponents/webcomponents-platform#^1.0.0-rc.1",
+    "es6-promise": "stefanpenner/es6-promise#^4.1.0",
+    "template": "webcomponents/template#^1.0.0-rc.1",
+    "webcomponentsjs": "webcomponents/webcomponentsjs#^1.0.0-rc.7"
+  }
+}
