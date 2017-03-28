@@ -1,6 +1,6 @@
 {
   "name": "byu-web-component-polyfills",
-  "version": "1.0.0",
+  "version": "0.2.0",
   "description": "Component Polyfills (custom elements and shadow/shady DOM)",
   "main": "index.js",
   "repository": "git@github.com:byuweb/web-component-polyfills.git",
