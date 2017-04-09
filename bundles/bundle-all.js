@@ -17,20 +17,18 @@
 "use strict";
 
 //------ webcomponents-platform ------
-import '../bower_components/webcomponents-platform/webcomponents-platform.js'
+import '../node_modules/webcomponents-platform/webcomponents-platform.js'
 //------ template ------
-import '../bower_components/template/template.js'
+import '../node_modules/@webcomponents/template/template.js'
 //------ es6-promise ------
-import '../bower_components/es6-promise/dist/es6-promise.auto.min.js'
+import '../node_modules/es6-promise/dist/es6-promise.auto.min.js'
 //------ pre-polyfill ------
-import '../bower_components/webcomponentsjs/src/pre-polyfill.js'
+import '../node_modules/webcomponents.js/src/pre-polyfill.js'
 //------ shadydom ------
-import '../bower_components/shadydom/src/shadydom.js'
+import '../node_modules/@webcomponents/shadydom/src/shadydom.js'
 //------ custom-elements ------
-import '../bower_components/custom-elements/src/custom-elements.js'
+import '../node_modules/@webcomponents/custom-elements/src/custom-elements.js'
 //------ shadycss ------
-import '../bower_components/shadycss/entrypoints/scoping-shim.js'
-//------ post-polyfill ------
-// import '../bower_components/webcomponentsjs/src/post-polyfill.js'
+import '../node_modules/@webcomponents/shadycss/entrypoints/scoping-shim.js'
 //------ unresolved styles ------
-import '../bower_components/webcomponentsjs/src/unresolved.js'
+import '../node_modules/webcomponents.js/src/unresolved.js'
