@@ -1027,6 +1027,9 @@ var cloneNode = Element.prototype.cloneNode;
 var importNode = Document.prototype.importNode;
 var addEventListener = Element.prototype.addEventListener;
 var removeEventListener = Element.prototype.removeEventListener;
+var windowAddEventListener = Window.prototype.addEventListener;
+var windowRemoveEventListener = Window.prototype.removeEventListener;
+var dispatchEvent = Element.prototype.dispatchEvent;
 
 var nativeMethods = Object.freeze({
 	appendChild: appendChild,
@@ -1037,7 +1040,10 @@ var nativeMethods = Object.freeze({
 	cloneNode: cloneNode,
 	importNode: importNode,
 	addEventListener: addEventListener,
-	removeEventListener: removeEventListener
+	removeEventListener: removeEventListener,
+	windowAddEventListener: windowAddEventListener,
+	windowRemoveEventListener: windowRemoveEventListener,
+	dispatchEvent: dispatchEvent
 });
 
 /**
@@ -1353,7 +1359,10 @@ var OutsideAccessors = {
   parentElement: {
     /** @this {Node} */
     get: function get() {
-      var l = this.__shady && this.__shady.parentElement;
+      var l = this.__shady && this.__shady.parentNode;
+      if (l && l.nodeType !== Node.ELEMENT_NODE) {
+        l = null;
+      }
       return l !== undefined ? l : parentElement(this);
     },
 
@@ -1456,6 +1465,7 @@ var InsideAccessors = {
      * @this {HTMLElement}
      */
     get: function get() {
+      var childNodes$$1 = void 0;
       if (this.__shady && this.__shady.firstChild !== undefined) {
         if (!this.__shady.childNodes) {
           this.__shady.childNodes = [];
@@ -1463,10 +1473,23 @@ var InsideAccessors = {
             this.__shady.childNodes.push(n);
           }
         }
-        return this.__shady.childNodes;
+        childNodes$$1 = this.__shady.childNodes;
       } else {
-        return childNodes(this);
+        childNodes$$1 = childNodes(this);
       }
+      childNodes$$1.item = function (index) {
+        return childNodes$$1[index];
+      };
+      return childNodes$$1;
+    },
+
+    configurable: true
+  },
+
+  childElementCount: {
+    /** @this {HTMLElement} */
+    get: function get() {
+      return this.children.length;
     },
 
     configurable: true
@@ -1519,9 +1542,7 @@ var InsideAccessors = {
         this.nodeValue = text;
       } else {
         clearNode(this);
-        if (text) {
-          this.appendChild(document.createTextNode(text));
-        }
+        this.appendChild(document.createTextNode(text));
       }
     },
 
@@ -1572,13 +1593,18 @@ var InsideAccessors = {
      * @this {HTMLElement}
      */
     get: function get() {
+      var children$$1 = void 0;
       if (this.__shady && this.__shady.firstChild !== undefined) {
-        return Array.prototype.filter.call(this.childNodes, function (n) {
+        children$$1 = Array.prototype.filter.call(this.childNodes, function (n) {
           return n.nodeType === Node.ELEMENT_NODE;
         });
       } else {
-        return children(this);
+        children$$1 = children(this);
       }
+      children$$1.item = function (index) {
+        return children$$1[index];
+      };
+      return children$$1;
     },
 
     configurable: true
@@ -2301,6 +2327,8 @@ subject to an additional IP rights grant found at http://polymer.github.io/PATEN
 
 // https://github.com/w3c/webcomponents/issues/513#issuecomment-224183937
 var alwaysComposed = {
+  'blur': true,
+  'focus': true,
   'focusin': true,
   'focusout': true,
   'click': true,
@@ -2475,6 +2503,9 @@ function fireHandlers(event, node, phase) {
   var hs = node.__handlers && node.__handlers[event.type] && node.__handlers[event.type][phase];
   if (hs) {
     for (var i = 0, fn; fn = hs[i]; i++) {
+      if (event.target === event.relatedTarget) {
+        return;
+      }
       fn.call(node, event);
       if (event.__immediatePropagationStopped) {
         return;
@@ -2503,7 +2534,11 @@ function retargetNonBubblingEvent(e) {
   }
 
   // set the event phase to `AT_TARGET` as in spec
-  Object.defineProperty(e, 'eventPhase', { value: Event.AT_TARGET });
+  Object.defineProperty(e, 'eventPhase', {
+    get: function get$$1() {
+      return Event.AT_TARGET;
+    }
+  });
 
   // the event only needs to be fired when owner roots change when iterating the event path
   // keep track of the last seen owner root
@@ -2533,11 +2568,20 @@ function listenerSettingsEqual(savedListener, node, type, capture, once, passive
   return node === savedNode && type === savedType && capture === savedCapture && once === savedOnce && passive === savedPassive;
 }
 
+function findListener(wrappers, node, type, capture, once, passive) {
+  for (var i = 0; i < wrappers.length; i++) {
+    if (listenerSettingsEqual(wrappers[i], node, type, capture, once, passive)) {
+      return i;
+    }
+  }
+  return -1;
+}
+
 /**
  * @this {Event}
  */
-function addEventListener$1(type, fn, optionsOrCapture) {
-  if (!fn) {
+function addEventListener$1(type, fnOrObj, optionsOrCapture) {
+  if (!fnOrObj) {
     return;
   }
 
@@ -2559,15 +2603,18 @@ function addEventListener$1(type, fn, optionsOrCapture) {
     once = false;
     passive = false;
   }
-  if (fn.__eventWrappers) {
+  // hack to let ShadyRoots have event listeners
+  // event listener will be on host, but `currentTarget`
+  // will be set to shadyroot for event listener
+  var target = optionsOrCapture && optionsOrCapture.__shadyTarget || this;
+
+  if (fnOrObj.__eventWrappers) {
     // Stop if the wrapper function has already been created.
-    for (var i = 0; i < fn.__eventWrappers.length; i++) {
-      if (listenerSettingsEqual(fn.__eventWrappers[i], this, type, capture, once, passive)) {
-        return;
-      }
+    if (findListener(fnOrObj.__eventWrappers, target, type, capture, once, passive) > -1) {
+      return;
     }
   } else {
-    fn.__eventWrappers = [];
+    fnOrObj.__eventWrappers = [];
   }
 
   /**
@@ -2576,26 +2623,50 @@ function addEventListener$1(type, fn, optionsOrCapture) {
   var wrapperFn = function wrapperFn(e) {
     // Support `once` option.
     if (once) {
-      this.removeEventListener(type, fn, optionsOrCapture);
+      this.removeEventListener(type, fnOrObj, optionsOrCapture);
     }
     if (!e['__target']) {
       patchEvent(e);
     }
+    var lastCurrentTargetDesc = void 0;
+    if (target !== this) {
+      // replace `currentTarget` to make `target` and `relatedTarget` correct for inside the shadowroot
+      lastCurrentTargetDesc = Object.getOwnPropertyDescriptor(e, 'currentTarget');
+      Object.defineProperty(e, 'currentTarget', {
+        get: function get$$1() {
+          return target;
+        },
+        configurable: true });
+    }
     // There are two critera that should stop events from firing on this node
     // 1. the event is not composed and the current node is not in the same root as the target
     // 2. when bubbling, if after retargeting, relatedTarget and target point to the same node
-    if (e.composed || e.composedPath().indexOf(this) > -1) {
-      if (e.eventPhase === Event.BUBBLING_PHASE) {
-        if (e.target === e.relatedTarget) {
+    if (e.composed || e.composedPath().indexOf(target) > -1) {
+      if (e.target === e.relatedTarget) {
+        if (e.eventPhase === Event.BUBBLING_PHASE) {
           e.stopImmediatePropagation();
-          return;
+        }
+        return;
+      }
+      // prevent non-bubbling events from triggering bubbling handlers on shadowroot, but only if not in capture phase
+      if (e.eventPhase !== Event.CAPTURING_PHASE && !e.bubbles && e.target !== target) {
+        return;
+      }
+      var ret = (typeof fnOrObj === 'undefined' ? 'undefined' : _typeof(fnOrObj)) === 'object' && fnOrObj.handleEvent ? fnOrObj.handleEvent(e) : fnOrObj.call(target, e);
+      if (target !== this) {
+        // replace the "correct" `currentTarget`
+        if (lastCurrentTargetDesc) {
+          Object.defineProperty(e, 'currentTarget', lastCurrentTargetDesc);
+          lastCurrentTargetDesc = null;
+        } else {
+          delete e['currentTarget'];
         }
       }
-      return fn.call(this, e);
+      return ret;
     }
   };
   // Store the wrapper information.
-  fn.__eventWrappers.push({
+  fnOrObj.__eventWrappers.push({
     node: this,
     type: type,
     capture: capture,
@@ -2609,15 +2680,16 @@ function addEventListener$1(type, fn, optionsOrCapture) {
     this.__handlers[type] = this.__handlers[type] || { 'capture': [], 'bubble': [] };
     this.__handlers[type][capture ? 'capture' : 'bubble'].push(wrapperFn);
   } else {
-    addEventListener.call(this, type, wrapperFn, optionsOrCapture);
+    var ael = this instanceof Window ? windowAddEventListener : addEventListener;
+    ael.call(this, type, wrapperFn, optionsOrCapture);
   }
 }
 
 /**
  * @this {Event}
  */
-function removeEventListener$1(type, fn, optionsOrCapture) {
-  if (!fn) {
+function removeEventListener$1(type, fnOrObj, optionsOrCapture) {
+  if (!fnOrObj) {
     return;
   }
 
@@ -2634,27 +2706,26 @@ function removeEventListener$1(type, fn, optionsOrCapture) {
     once = false;
     passive = false;
   }
+  var target = optionsOrCapture && optionsOrCapture.__shadyTarget || this;
   // Search the wrapped function.
   var wrapperFn = undefined;
-  if (fn.__eventWrappers) {
-    for (var i = 0; i < fn.__eventWrappers.length; i++) {
-      if (listenerSettingsEqual(fn.__eventWrappers[i], this, type, capture, once, passive)) {
-        wrapperFn = fn.__eventWrappers.splice(i, 1)[0].wrapperFn;
-        // Cleanup.
-        if (!fn.__eventWrappers.length) {
-          fn.__eventWrappers = undefined;
-        }
-        break;
+  if (fnOrObj.__eventWrappers) {
+    var idx = findListener(fnOrObj.__eventWrappers, target, type, capture, once, passive);
+    if (idx > -1) {
+      wrapperFn = fnOrObj.__eventWrappers.splice(idx, 1)[0].wrapperFn;
+      // Cleanup.
+      if (!fnOrObj.__eventWrappers.length) {
+        fnOrObj.__eventWrappers = undefined;
       }
     }
   }
-
-  removeEventListener.call(this, type, wrapperFn || fn, optionsOrCapture);
+  var rel = this instanceof Window ? windowRemoveEventListener : removeEventListener;
+  rel.call(this, type, wrapperFn || fnOrObj, optionsOrCapture);
   if (wrapperFn && nonBubblingEventsToRetarget[type] && this.__handlers && this.__handlers[type]) {
     var arr = this.__handlers[type][capture ? 'capture' : 'bubble'];
-    var idx = arr.indexOf(wrapperFn);
-    if (idx > -1) {
-      arr.splice(idx, 1);
+    var _idx = arr.indexOf(wrapperFn);
+    if (_idx > -1) {
+      arr.splice(_idx, 1);
     }
   }
 }
@@ -3134,7 +3205,7 @@ var _class = function () {
       // NOTE: cannot bubble correctly here so not setting bubbles: true
       // Safari tech preview does not bubble but chrome does
       // Spec says it bubbles (https://dom.spec.whatwg.org/#mutation-observers)
-      insertionPoint.dispatchEvent(new NormalizedEvent('slotchange'));
+      dispatchEvent.call(insertionPoint, new NormalizedEvent('slotchange'));
       if (insertionPoint.__shady.assignedSlot) {
         this._fireSlotChange(insertionPoint.__shady.assignedSlot);
       }
@@ -3401,6 +3472,30 @@ ShadyRoot.prototype._getInsertionPoints = function () {
   return this._insertionPoints;
 };
 
+ShadyRoot.prototype.addEventListener = function (type, fn, optionsOrCapture) {
+  if ((typeof optionsOrCapture === 'undefined' ? 'undefined' : _typeof(optionsOrCapture)) !== 'object') {
+    optionsOrCapture = {
+      capture: Boolean(optionsOrCapture)
+    };
+  }
+  optionsOrCapture.__shadyTarget = this;
+  this.host.addEventListener(type, fn, optionsOrCapture);
+};
+
+ShadyRoot.prototype.removeEventListener = function (type, fn, optionsOrCapture) {
+  if ((typeof optionsOrCapture === 'undefined' ? 'undefined' : _typeof(optionsOrCapture)) !== 'object') {
+    optionsOrCapture = {
+      capture: Boolean(optionsOrCapture)
+    };
+  }
+  optionsOrCapture.__shadyTarget = this;
+  this.host.removeEventListener(type, fn, optionsOrCapture);
+};
+
+ShadyRoot.prototype.getElementById = function (id) {
+  return this.querySelector('#' + id);
+};
+
 /**
   Implements a pared down version of ShadowDOM's scoping, which is easy to
   polyfill across browsers.
@@ -3432,13 +3527,24 @@ function getAssignedSlot(node) {
   return node.__shady && node.__shady.assignedSlot || null;
 }
 
+var windowMixin = {
+
+  // NOTE: ensure these methods are bound to `window` so that `this` is correct
+  // when called directly from global context without a receiver; e.g.
+  // `addEventListener(...)`.
+  addEventListener: addEventListener$1.bind(window),
+
+  removeEventListener: removeEventListener$1.bind(window)
+
+};
+
 var nodeMixin = {
 
   addEventListener: addEventListener$1,
 
   removeEventListener: removeEventListener$1,
 
-  appendChild: function appendChild(node) {
+  appendChild: function appendChild$$1(node) {
     return insertBefore$1(this, node);
   },
   insertBefore: function insertBefore$$1(node, ref_node) {
@@ -3490,8 +3596,15 @@ var nodeMixin = {
       node = node.parentNode || (node instanceof ShadyRoot ? /** @type {ShadowRoot} */node.host : undefined);
     }
     return !!(node && node instanceof Document);
-  }
+  },
 
+  /**
+   * @this {Node}
+   */
+  dispatchEvent: function dispatchEvent$$1(event) {
+    flush();
+    return dispatchEvent.call(this, event);
+  }
 };
 
 // NOTE: For some reason `Text` redefines `assignedSlot`
@@ -3601,11 +3714,36 @@ var documentMixin = extendAll({
    */
   importNode: function importNode$$1(node, deep) {
     return importNode$1(node, deep);
+  },
+
+
+  /**
+   * @this {Document}
+   */
+  getElementById: function getElementById(id) {
+    return this.querySelector('#' + id);
   }
 }, fragmentMixin);
 
 Object.defineProperties(documentMixin, {
   '_activeElement': ActiveElementAccessor.activeElement
+});
+
+var nativeBlur = HTMLElement.prototype.blur;
+
+var htmlElementMixin = extendAll({
+  /**
+   * @this {HTMLElement}
+   */
+  blur: function blur() {
+    var root = this.shadowRoot;
+    var shadowActive = root && root.activeElement;
+    if (shadowActive) {
+      shadowActive.blur();
+    } else {
+      nativeBlur.call(this);
+    }
+  }
 });
 
 function patchBuiltin(proto, obj) {
@@ -3632,8 +3770,10 @@ function patchBuiltin(proto, obj) {
 // elements are individually patched when needed (see e.g.
 // `patchInside/OutsideElementAccessors` in `patch-accessors.js`).
 function patchBuiltins() {
+  var nativeHTMLElement = window['customElements'] && window['customElements']['nativeHTMLElement'] || HTMLElement;
   // These patches can always be done, for all supported browsers.
   patchBuiltin(window.Node.prototype, nodeMixin);
+  patchBuiltin(window.Window.prototype, windowMixin);
   patchBuiltin(window.Text.prototype, textMixin);
   patchBuiltin(window.DocumentFragment.prototype, fragmentMixin);
   patchBuiltin(window.Element.prototype, elementMixin);
@@ -3641,6 +3781,7 @@ function patchBuiltins() {
   if (window.HTMLSlotElement) {
     patchBuiltin(window.HTMLSlotElement.prototype, slotMixin);
   }
+  patchBuiltin(nativeHTMLElement.prototype, htmlElementMixin);
   // These patches can *only* be done
   // on browsers that have proper property descriptors on builtin prototypes.
   // This includes: IE11, Edge, Chrome >= 4?; Safari >= 10, Firefox
@@ -3651,7 +3792,6 @@ function patchBuiltins() {
     patchAccessors(window.Text.prototype);
     patchAccessors(window.DocumentFragment.prototype);
     patchAccessors(window.Element.prototype);
-    var nativeHTMLElement = window['customElements'] && window['customElements']['nativeHTMLElement'] || HTMLElement;
     patchAccessors(nativeHTMLElement.prototype);
     patchAccessors(window.Document.prototype);
     if (window.HTMLSlotElement) {
@@ -7015,6 +7155,11 @@ var StyleProperties = function () {
           }
           // shady and cache hit but not in document
         } else if (!style.parentNode) {
+          if (IS_IE && cssText.indexOf('@media') > -1) {
+            // @media rules may be stale in IE 10 and 11
+            // refresh the text content of the style to revalidate them.
+            style.textContent = cssText;
+          }
           applyStyle(style, null, styleInfo.placeholder);
         }
       }
@@ -7026,10 +7171,6 @@ var StyleProperties = function () {
           style['_useCount']++;
         }
         styleInfo.customStyle = style;
-      }
-      // @media rules may be stale in IE 10 and 11
-      if (IS_IE) {
-        style.textContent = style.textContent;
       }
       return style;
     }
