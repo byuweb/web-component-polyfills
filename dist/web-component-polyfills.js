@@ -443,31 +443,12 @@ var createClass = function () {
   };
 }();
 
-
-
-
-
-var defineProperty = function (obj, key, value) {
-  if (key in obj) {
-    Object.defineProperty(obj, key, {
-      value: value,
-      enumerable: true,
-      configurable: true,
-      writable: true
-    });
-  } else {
-    obj[key] = value;
-  }
-
-  return obj;
-};
-
 !function (t, e) {
   "object" == (typeof exports === "undefined" ? "undefined" : _typeof(exports)) && "undefined" != typeof module ? module.exports = e() : "function" == typeof define && define.amd ? define(e) : t.ES6Promise = e();
 }(window, function () {
   "use strict";
   function t(t) {
-    return "function" == typeof t || "object" == (typeof t === "undefined" ? "undefined" : _typeof(t)) && null !== t;
+    var e = typeof t === "undefined" ? "undefined" : _typeof(t);return null !== t && ("object" === e || "function" === e);
   }function e(t) {
     return "function" == typeof t;
   }function n(t) {
@@ -600,7 +581,7 @@ var defineProperty = function (obj, key, value) {
   }function k(t) {
     t[et] = ut++, t._state = void 0, t._result = void 0, t._subscribers = [];
   }function Y(t, e) {
-    this._instanceConstructor = t, this.promise = new t(p), this.promise[et] || k(this.promise), B(e) ? (this._input = e, this.length = e.length, this._remaining = e.length, this._result = new Array(this.length), 0 === this.length ? S(this.promise, this._result) : (this.length = this.length || 0, this._enumerate(), 0 === this._remaining && S(this.promise, this._result))) : j(this.promise, q());
+    this._instanceConstructor = t, this.promise = new t(p), this.promise[et] || k(this.promise), B(e) ? (this.length = e.length, this._remaining = e.length, this._result = new Array(this.length), 0 === this.length ? S(this.promise, this._result) : (this.length = this.length || 0, this._enumerate(e), 0 === this._remaining && S(this.promise, this._result))) : j(this.promise, q());
   }function q() {
     return new Error("Array Methods must be provided an Array");
   }function F(t) {
@@ -653,9 +634,9 @@ var defineProperty = function (obj, key, value) {
       ot = 2,
       it = new M(),
       st = new M(),
-      ut = 0;return Y.prototype._enumerate = function () {
-    for (var t = this.length, e = this._input, n = 0; this._state === nt && n < t; n++) {
-      this._eachEntry(e[n], n);
+      ut = 0;return Y.prototype._enumerate = function (t) {
+    for (var e = 0; this._state === nt && e < t.length; e++) {
+      this._eachEntry(t[e], e);
     }
   }, Y.prototype._eachEntry = function (t, e) {
     var n = this._instanceConstructor,
@@ -765,6 +746,10 @@ var desc = Object.getOwnPropertyDescriptor(Node.prototype, 'firstChild');
 
 settings.hasDescriptors = Boolean(desc && desc.configurable && desc.get);
 settings.inUse = settings['force'] || !settings.hasNativeShadowDOM;
+
+function isTrackingLogicalChildNodes(node) {
+  return node.__shady && node.__shady.firstChild !== undefined;
+}
 
 function isShadyRoot(obj) {
   return Boolean(obj.__localName === 'ShadyRoot');
@@ -1030,6 +1015,8 @@ var removeEventListener = Element.prototype.removeEventListener;
 var windowAddEventListener = Window.prototype.addEventListener;
 var windowRemoveEventListener = Window.prototype.removeEventListener;
 var dispatchEvent = Element.prototype.dispatchEvent;
+var querySelector = Element.prototype.querySelector;
+var querySelectorAll = Element.prototype.querySelectorAll;
 
 var nativeMethods = Object.freeze({
 	appendChild: appendChild,
@@ -1043,7 +1030,9 @@ var nativeMethods = Object.freeze({
 	removeEventListener: removeEventListener,
 	windowAddEventListener: windowAddEventListener,
 	windowRemoveEventListener: windowRemoveEventListener,
-	dispatchEvent: dispatchEvent
+	dispatchEvent: dispatchEvent,
+	querySelector: querySelector,
+	querySelectorAll: querySelectorAll
 });
 
 /**
@@ -1062,7 +1051,6 @@ subject to an additional IP rights grant found at http://polymer.github.io/PATEN
 // innerHTML and outerHTML
 
 // http://www.whatwg.org/specs/web-apps/current-work/multipage/the-end.html#escapingString
-
 var escapeAttrRegExp = /[&\u00A0"]/g;
 var escapeDataRegExp = /[&\u00A0<>]/g;
 
@@ -1252,18 +1240,21 @@ function innerHTML(node) {
 }
 
 function textContent(node) {
-  if (node.nodeType !== Node.ELEMENT_NODE) {
-    return node.nodeValue;
+  switch (node.nodeType) {
+    case Node.ELEMENT_NODE:
+    case Node.DOCUMENT_FRAGMENT_NODE:
+      var textWalker = document.createTreeWalker(node, NodeFilter.SHOW_TEXT, null, false);
+      var content = '',
+          n = void 0;
+      while (n = textWalker.nextNode()) {
+        // TODO(sorvell): can't use textContent since we patch it on Node.prototype!
+        // However, should probably patch it only on element.
+        content += n.nodeValue;
+      }
+      return content;
+    default:
+      return node.nodeValue;
   }
-  var textWalker = document.createTreeWalker(node, NodeFilter.SHOW_TEXT, null, false);
-  var content = '',
-      n = void 0;
-  while (n = textWalker.nextNode()) {
-    // TODO(sorvell): can't use textContent since we patch it on Node.prototype!
-    // However, should probably patch it only on element.
-    content += n.nodeValue;
-  }
-  return content;
 }
 
 var nativeTree = Object.freeze({
@@ -1466,7 +1457,7 @@ var InsideAccessors = {
      */
     get: function get() {
       var childNodes$$1 = void 0;
-      if (this.__shady && this.__shady.firstChild !== undefined) {
+      if (isTrackingLogicalChildNodes(this)) {
         if (!this.__shady.childNodes) {
           this.__shady.childNodes = [];
           for (var n = this.firstChild; n; n = n.nextSibling) {
@@ -1520,7 +1511,7 @@ var InsideAccessors = {
      * @this {HTMLElement}
      */
     get: function get() {
-      if (this.__shady && this.__shady.firstChild !== undefined) {
+      if (isTrackingLogicalChildNodes(this)) {
         var tc = [];
         for (var i = 0, cn = this.childNodes, c; c = cn[i]; i++) {
           if (c.nodeType !== Node.COMMENT_NODE) {
@@ -1535,14 +1526,19 @@ var InsideAccessors = {
 
     /**
      * @this {HTMLElement}
+     * @param {string} text
      */
     set: function set(text) {
-      if (this.nodeType !== Node.ELEMENT_NODE) {
-        // TODO(sorvell): can't do this if patch nodeValue.
-        this.nodeValue = text;
-      } else {
-        clearNode(this);
-        this.appendChild(document.createTextNode(text));
+      switch (this.nodeType) {
+        case Node.ELEMENT_NODE:
+        case Node.DOCUMENT_FRAGMENT_NODE:
+          clearNode(this);
+          this.appendChild(document.createTextNode(text));
+          break;
+        default:
+          // TODO(sorvell): can't do this if patch nodeValue.
+          this.nodeValue = text;
+          break;
       }
     },
 
@@ -1594,7 +1590,7 @@ var InsideAccessors = {
      */
     get: function get() {
       var children$$1 = void 0;
-      if (this.__shady && this.__shady.firstChild !== undefined) {
+      if (isTrackingLogicalChildNodes(this)) {
         children$$1 = Array.prototype.filter.call(this.childNodes, function (n) {
           return n.nodeType === Node.ELEMENT_NODE;
         });
@@ -1618,7 +1614,7 @@ var InsideAccessors = {
     get: function get() {
       var content = this.localName === 'template' ?
       /** @type {HTMLTemplateElement} */this.content : this;
-      if (this.__shady && this.__shady.firstChild !== undefined) {
+      if (isTrackingLogicalChildNodes(this)) {
         return getInnerHTML(content);
       } else {
         return innerHTML(content);
@@ -1657,15 +1653,7 @@ var ShadowRootAccessor = {
      * @this {HTMLElement}
      */
     get: function get() {
-      return this.__shady && this.__shady.root || null;
-    },
-
-    /**
-     * @this {HTMLElement}
-     */
-    set: function set(value) {
-      this.__shady = this.__shady || {};
-      this.__shady.root = value;
+      return this.__shady && this.__shady.publicRoot || null;
     },
 
     configurable: true
@@ -1868,77 +1856,197 @@ Code distributed by Google as part of the polymer project is also
 subject to an additional IP rights grant found at http://polymer.github.io/PATENTS.txt
 */
 
+// Patched `insertBefore`. Note that all mutations that add nodes are routed
+// here. When a <slot> is added or a node is added to a host with a shadowRoot
+// with a slot, a standard dom `insert` call is aborted and `_asyncRender`
+// is called on the relevant shadowRoot. In all other cases, a standard dom
+// `insert` can be made, but the location and ref_node may need to be changed.
 /**
- * Try to add node. Record logical info, track insertion points, perform
- * distribution iff needed. Return true if the add is handled.
- * @param {Node} container
+ * @param {Node} parent
  * @param {Node} node
- * @param {Node} ref_node
- * @return {boolean}
+ * @param {Node=} ref_node
  */
-function addNode(container, node, ref_node) {
-  var ownerRoot = ownerShadyRootForNode(container);
-  var ipAdded = void 0;
-  if (ownerRoot) {
-    // optimization: special insertion point tracking
-    // TODO(sorvell): verify that the renderPending check here should not be needed.
-    if (node['__noInsertionPoint'] && !ownerRoot._changePending) {
-      ownerRoot._skipUpdateInsertionPoints = true;
-    }
-    // note: we always need to see if an insertion point is added
-    // since this saves logical tree info; however, invalidation state
-    // needs
-    ipAdded = _maybeAddInsertionPoint(node, container, ownerRoot);
-    // invalidate insertion points IFF not already invalid!
-    if (ipAdded) {
-      ownerRoot._skipUpdateInsertionPoints = false;
+function insertBefore$1(parent, node, ref_node) {
+  if (node === parent) {
+    throw Error('Failed to execute \'appendChild\' on \'Node\': The new child element contains the parent.');
+  }
+  if (ref_node) {
+    var p = ref_node.__shady && ref_node.__shady.parentNode;
+    if (p !== undefined && p !== parent || p === undefined && parentNode(ref_node) !== parent) {
+      throw Error('Failed to execute \'insertBefore\' on \'Node\': The node ' + 'before which the new node is to be inserted is not a child of this node.');
     }
   }
-  if (container.__shady && container.__shady.firstChild !== undefined) {
-    recordInsertBefore(node, container, ref_node);
+  if (ref_node === node) {
+    return node;
   }
-  // if not distributing and not adding to host, do a fast path addition
-  // TODO(sorvell): revisit flow since `ipAdded` needed here if
-  // node is a fragment that has a patched QSA.
-  var handled = _maybeDistribute(node, container, ownerRoot, ipAdded) || container.__shady.root ||
-  // TODO(sorvell): we *should* consider the add "handled"
-  // if the container or ownerRoot is `_renderPending`.
-  // However, this will regress performance right now and is blocked on a
-  // fix for https://github.com/webcomponents/shadydom/issues/95
-  // handled if ref_node parent is a root that is rendering.
-  ref_node && isShadyRoot(ref_node.parentNode) && ref_node.parentNode._renderPending;
-  return handled;
+  // remove from existing location
+  if (node.parentNode) {
+    // NOTE: avoid node.removeChild as this *can* trigger another patched
+    // method (e.g. custom elements) and we want only the shady method to run.
+    removeChild$1(node.parentNode, node);
+  }
+  // add to new parent
+  var preventNativeInsert = void 0;
+  var ownerRoot = ownerShadyRootForNode(parent);
+  // if a slot is added, must render containing root.
+  var slotsAdded = ownerRoot && findContainedSlots(node);
+  if (ownerRoot && (parent.localName === 'slot' || slotsAdded)) {
+    ownerRoot._asyncRender();
+  }
+  if (isTrackingLogicalChildNodes(parent)) {
+    recordInsertBefore(node, parent, ref_node);
+    // when inserting into a host with a shadowRoot with slot, use
+    // `shadowRoot._asyncRender()` via `attach-shadow` module
+    if (hasShadowRootWithSlot(parent)) {
+      parent.__shady.root._asyncRender();
+      preventNativeInsert = true;
+      // when inserting into a host with shadowRoot with NO slot, do nothing
+      // as the node should not be added to composed dome anywhere.
+    } else if (parent.__shady.root) {
+      preventNativeInsert = true;
+    }
+  }
+  if (!preventNativeInsert) {
+    // if adding to a shadyRoot, add to host instead
+    var container = isShadyRoot(parent) ?
+    /** @type {ShadowRoot} */parent.host : parent;
+    // if ref_node, get the ref_node that's actually in composed dom.
+    if (ref_node) {
+      ref_node = firstComposedNode(ref_node);
+      insertBefore.call(container, node, ref_node);
+    } else {
+      appendChild.call(container, node);
+    }
+  }
+  scheduleObserver(parent, node);
+  // with insertion complete, can safely update insertion points.
+  if (slotsAdded) {
+    ownerRoot._addSlots(slotsAdded);
+  }
+  return node;
+}
+
+function findContainedSlots(node) {
+  if (!node['__noInsertionPoint']) {
+    var slots = void 0;
+    if (node.localName === 'slot') {
+      slots = [node];
+    } else if (node.querySelectorAll) {
+      slots = node.querySelectorAll('slot');
+    }
+    if (slots && slots.length) {
+      return slots;
+    }
+  }
 }
 
 /**
- * Try to remove node: update logical info and perform distribution iff
- * needed. Return true if the removal has been handled.
- * note that it's possible for both the node's host and its parent
- * to require distribution... both cases are handled here.
+ * Patched `removeChild`. Note that all dom "removals" are routed here.
+ * Removes the given `node` from the element's `children`.
+ * This method also performs dom composition.
+ * @param {Node} parent
  * @param {Node} node
- * @return {boolean}
- */
-function removeNode(node) {
-  // important that we want to do this only if the node has a logical parent
-  var logicalParent = node.__shady && node.__shady.parentNode;
-  var distributed = void 0;
+*/
+function removeChild$1(parent, node) {
+  if (node.parentNode !== parent) {
+    throw Error('The node to be removed is not a child of this node: ' + node);
+  }
+  var preventNativeRemove = void 0;
   var ownerRoot = ownerShadyRootForNode(node);
-  if (logicalParent || ownerRoot) {
-    // distribute node's parent iff needed
-    distributed = maybeDistributeParent(node);
-    if (logicalParent) {
-      recordRemoveChild(node, logicalParent);
-    }
-    // remove node from root and distribute it iff needed
-    var removedDistributed = ownerRoot && _removeDistributedChildren(ownerRoot, node);
-    var addedInsertionPoint = logicalParent && ownerRoot && logicalParent.localName === ownerRoot.getInsertionPointTag();
-    if (removedDistributed || addedInsertionPoint) {
-      ownerRoot._skipUpdateInsertionPoints = false;
-      updateRootViaContentChange(ownerRoot);
+  var removingInsertionPoint = void 0;
+  if (isTrackingLogicalChildNodes(parent)) {
+    recordRemoveChild(node, parent);
+    if (hasShadowRootWithSlot(parent)) {
+      parent.__shady.root._asyncRender();
+      preventNativeRemove = true;
     }
   }
-  _removeOwnerShadyRoot(node);
-  return distributed;
+  removeOwnerShadyRoot(node);
+  // if removing slot, must render containing root
+  if (ownerRoot) {
+    var changeSlotContent = parent && parent.localName === 'slot';
+    if (changeSlotContent) {
+      preventNativeRemove = true;
+    }
+    removingInsertionPoint = ownerRoot._removeContainedSlots(node);
+    if (removingInsertionPoint || changeSlotContent) {
+      ownerRoot._asyncRender();
+    }
+  }
+  if (!preventNativeRemove) {
+    // if removing from a shadyRoot, remove form host instead
+    var container = isShadyRoot(parent) ?
+    /** @type {ShadowRoot} */parent.host : parent;
+    // not guaranteed to physically be in container; e.g.
+    // (1) if parent has a shadyRoot, element may or may not at distributed
+    // location (could be undistributed)
+    // (2) if parent is a slot, element may not ben in composed dom
+    if (!(parent.__shady.root || node.localName === 'slot') || container === parentNode(node)) {
+      removeChild.call(container, node);
+    }
+  }
+  scheduleObserver(parent, null, node);
+  return node;
+}
+
+function removeOwnerShadyRoot(node) {
+  // optimization: only reset the tree if node is actually in a root
+  if (hasCachedOwnerRoot(node)) {
+    var c$ = node.childNodes;
+    for (var i = 0, l = c$.length, n; i < l && (n = c$[i]); i++) {
+      removeOwnerShadyRoot(n);
+    }
+  }
+  if (node.__shady) {
+    node.__shady.ownerShadyRoot = undefined;
+  }
+}
+
+function hasCachedOwnerRoot(node) {
+  return Boolean(node.__shady && node.__shady.ownerShadyRoot !== undefined);
+}
+
+/**
+ * Finds the first flattened node that is composed in the node's parent.
+ * If the given node is a slot, then the first flattened node is returned
+ * if it exists, otherwise advance to the node's nextSibling.
+ * @param {Node} node within which to find first composed node
+ * @returns {Node} first composed node
+ */
+function firstComposedNode(node) {
+  var composed = node;
+  if (node && node.localName === 'slot') {
+    var flattened = node.__shady && node.__shady.flattenedNodes;
+    composed = flattened && flattened.length ? flattened[0] : firstComposedNode(node.nextSibling);
+  }
+  return composed;
+}
+
+function hasShadowRootWithSlot(node) {
+  var root = node && node.__shady && node.__shady.root;
+  return root && root._hasInsertionPoint();
+}
+
+/**
+ * Should be called whenever an attribute changes. If the `slot` attribute
+ * changes, provokes rendering if necessary. If a `<slot>` element's `name`
+ * attribute changes, updates the root's slot map and renders.
+ * @param {Node} node
+ * @param {string} name
+ */
+function distributeAttributeChange(node, name) {
+  if (name === 'slot') {
+    var parent = node.parentNode;
+    if (hasShadowRootWithSlot(parent)) {
+      parent.__shady.root._asyncRender();
+    }
+  } else if (node.localName === 'slot' && name === 'name') {
+    var root = ownerShadyRootForNode(node);
+    if (root) {
+      root._updateSlotName(node);
+      root._asyncRender();
+    }
+  }
 }
 
 /**
@@ -1946,7 +2054,7 @@ function removeNode(node) {
  * @param {Node=} addedNode
  * @param {Node=} removedNode
  */
-function _scheduleObserver(node, addedNode, removedNode) {
+function scheduleObserver(node, addedNode, removedNode) {
   var observer = node.__shady && node.__shady.observer;
   if (observer) {
     if (addedNode) {
@@ -1957,23 +2065,6 @@ function _scheduleObserver(node, addedNode, removedNode) {
     }
     observer.schedule();
   }
-}
-
-function removeNodeFromParent(node, logicalParent) {
-  if (logicalParent) {
-    _scheduleObserver(logicalParent, null, node);
-    return removeNode(node);
-  } else {
-    // composed but not logical parent
-    if (node.parentNode) {
-      removeChild.call(node.parentNode, node);
-    }
-    _removeOwnerShadyRoot(node);
-  }
-}
-
-function _hasCachedOwnerRoot(node) {
-  return Boolean(node.__shady && node.__shady.ownerShadyRoot !== undefined);
 }
 
 /**
@@ -2006,152 +2097,6 @@ function getRootNode(node, options) {
   return root;
 }
 
-function _maybeDistribute(node, container, ownerRoot, ipAdded) {
-  // TODO(sorvell): technically we should check non-fragment nodes for
-  // <content> children but since this case is assumed to be exceedingly
-  // rare, we avoid the cost and will address with some specific api
-  // when the need arises.  For now, the user must call
-  // distributeContent(true), which updates insertion points manually
-  // and forces distribution.
-  var insertionPointTag = ownerRoot && ownerRoot.getInsertionPointTag() || '';
-  var fragContent = node.nodeType === Node.DOCUMENT_FRAGMENT_NODE && !node['__noInsertionPoint'] && insertionPointTag && node.querySelector(insertionPointTag);
-  var wrappedContent = fragContent && fragContent.parentNode.nodeType !== Node.DOCUMENT_FRAGMENT_NODE;
-  var hasContent = fragContent || node.localName === insertionPointTag;
-  // There are 3 possible cases where a distribution may need to occur:
-  // 1. <content> being inserted (the host of the shady root where
-  //    content is inserted needs distribution)
-  // 2. children being inserted into parent with a shady root (parent
-  //    needs distribution)
-  // 3. container is an insertionPoint
-  if (hasContent || container.localName === insertionPointTag || ipAdded) {
-    if (ownerRoot) {
-      // note, insertion point list update is handled after node
-      // mutations are complete
-      updateRootViaContentChange(ownerRoot);
-    }
-  }
-  var needsDist = _nodeNeedsDistribution(container);
-  if (needsDist) {
-    var root = container.__shady && container.__shady.root;
-    updateRootViaContentChange(root);
-  }
-  // Return true when distribution will fully handle the composition
-  // Note that if a content was being inserted that was wrapped by a node,
-  // and the parent does not need distribution, return false to allow
-  // the nodes to be added directly, after which children may be
-  // distributed and composed into the wrapping node(s)
-  return needsDist || hasContent && !wrappedContent;
-}
-
-/* note: parent argument is required since node may have an out
-of date parent at this point; returns true if a <content> is being added */
-function _maybeAddInsertionPoint(node, parent, root) {
-  var added = void 0;
-  var insertionPointTag = root.getInsertionPointTag();
-  if (node.nodeType === Node.DOCUMENT_FRAGMENT_NODE && !node['__noInsertionPoint']) {
-    var c$ = node.querySelectorAll(insertionPointTag);
-    for (var i = 0, n, np, na; i < c$.length && (n = c$[i]); i++) {
-      np = n.parentNode;
-      // don't allow node's parent to be fragment itself
-      if (np === node) {
-        np = parent;
-      }
-      na = _maybeAddInsertionPoint(n, np, root);
-      added = added || na;
-    }
-  } else if (node.localName === insertionPointTag) {
-    recordChildNodes(parent);
-    recordChildNodes(node);
-    added = true;
-  }
-  return added;
-}
-
-function _nodeNeedsDistribution(node) {
-  var root = node && node.__shady && node.__shady.root;
-  return root && root.hasInsertionPoint();
-}
-
-function _removeDistributedChildren(root, container) {
-  var hostNeedsDist = void 0;
-  var ip$ = root._getInsertionPoints();
-  for (var i = 0; i < ip$.length; i++) {
-    var insertionPoint = ip$[i];
-    if (_contains(container, insertionPoint)) {
-      var dc$ = insertionPoint.assignedNodes({ flatten: true });
-      for (var j = 0; j < dc$.length; j++) {
-        hostNeedsDist = true;
-        var node = dc$[j];
-        var parent = parentNode(node);
-        if (parent) {
-          removeChild.call(parent, node);
-        }
-      }
-    }
-  }
-  return hostNeedsDist;
-}
-
-function _contains(container, node) {
-  while (node) {
-    if (node == container) {
-      return true;
-    }
-    node = node.parentNode;
-  }
-}
-
-function _removeOwnerShadyRoot(node) {
-  // optimization: only reset the tree if node is actually in a root
-  if (_hasCachedOwnerRoot(node)) {
-    var c$ = node.childNodes;
-    for (var i = 0, l = c$.length, n; i < l && (n = c$[i]); i++) {
-      _removeOwnerShadyRoot(n);
-    }
-  }
-  node.__shady = node.__shady || {};
-  node.__shady.ownerShadyRoot = undefined;
-}
-
-// TODO(sorvell): This will fail if distribution that affects this
-// question is pending; this is expected to be exceedingly rare, but if
-// the issue comes up, we can force a flush in this case.
-function firstComposedNode(insertionPoint) {
-  var n$ = insertionPoint.assignedNodes({ flatten: true });
-  var root = getRootNode(insertionPoint);
-  for (var i = 0, l = n$.length, n; i < l && (n = n$[i]); i++) {
-    // means that we're composed to this spot.
-    if (root.isFinalDestination(insertionPoint, n)) {
-      return n;
-    }
-  }
-}
-
-function maybeDistributeParent(node) {
-  var parent = node.parentNode;
-  if (_nodeNeedsDistribution(parent)) {
-    updateRootViaContentChange(parent.__shady.root);
-    return true;
-  }
-}
-
-function updateRootViaContentChange(root) {
-  // mark root as mutation based on a mutation
-  root._changePending = true;
-  root.update();
-}
-
-function distributeAttributeChange(node, name) {
-  if (name === 'slot') {
-    maybeDistributeParent(node);
-  } else if (node.localName === 'slot' && name === 'name') {
-    var root = ownerShadyRootForNode(node);
-    if (root) {
-      root.update();
-    }
-  }
-}
-
 // NOTE: `query` is used primarily for ShadyDOM's querySelector impl,
 // but it's also generally useful to recurse through the element tree
 // and is used by Polymer's styling system.
@@ -2162,19 +2107,19 @@ function distributeAttributeChange(node, name) {
  */
 function query(node, matcher, halter) {
   var list = [];
-  _queryElements(node.childNodes, matcher, halter, list);
+  queryElements(node.childNodes, matcher, halter, list);
   return list;
 }
 
-function _queryElements(elements, matcher, halter, list) {
+function queryElements(elements, matcher, halter, list) {
   for (var i = 0, l = elements.length, c; i < l && (c = elements[i]); i++) {
-    if (c.nodeType === Node.ELEMENT_NODE && _queryElement(c, matcher, halter, list)) {
+    if (c.nodeType === Node.ELEMENT_NODE && queryElement(c, matcher, halter, list)) {
       return true;
     }
   }
 }
 
-function _queryElement(node, matcher, halter, list) {
+function queryElement(node, matcher, halter, list) {
   var result = matcher(node);
   if (result) {
     list.push(node);
@@ -2182,13 +2127,13 @@ function _queryElement(node, matcher, halter, list) {
   if (halter && halter(result)) {
     return result;
   }
-  _queryElements(node.childNodes, matcher, halter, list);
+  queryElements(node.childNodes, matcher, halter, list);
 }
 
 function renderRootNode(element) {
   var root = element.getRootNode();
   if (isShadyRoot(root)) {
-    root.render();
+    root._render();
   }
 }
 
@@ -2209,74 +2154,6 @@ function setAttribute$1(node, attr, value) {
 function removeAttribute$1(node, attr) {
   removeAttribute.call(node, attr);
   distributeAttributeChange(node, attr);
-}
-
-// cases in which we may not be able to just do standard native call
-// 1. container has a shadyRoot (needsDistribution IFF the shadyRoot
-// has an insertion point)
-// 2. container is a shadyRoot (don't distribute, instead set
-// container to container.host.
-// 3. node is <content> (host of container needs distribution)
-/**
- * @param {Node} parent
- * @param {Node} node
- * @param {Node=} ref_node
- */
-function insertBefore$1(parent, node, ref_node) {
-  if (ref_node) {
-    var p = ref_node.__shady && ref_node.__shady.parentNode;
-    if (p !== undefined && p !== parent || p === undefined && parentNode(ref_node) !== parent) {
-      throw Error('Failed to execute \'insertBefore\' on \'Node\': The node ' + 'before which the new node is to be inserted is not a child of this node.');
-    }
-  }
-  if (ref_node === node) {
-    return node;
-  }
-  // remove node from its current position iff it's in a tree.
-  if (node.nodeType !== Node.DOCUMENT_FRAGMENT_NODE) {
-    var _parent = node.__shady && node.__shady.parentNode;
-    removeNodeFromParent(node, _parent);
-  }
-  if (!addNode(parent, node, ref_node)) {
-    if (ref_node) {
-      // if ref_node is an insertion point replace with first distributed node
-      var root = ownerShadyRootForNode(ref_node);
-      if (root) {
-        ref_node = ref_node.localName === root.getInsertionPointTag() ? firstComposedNode( /** @type {!HTMLSlotElement} */ref_node) : ref_node;
-      }
-    }
-    // if adding to a shadyRoot, add to host instead
-    var container = isShadyRoot(parent) ? /** @type {ShadowRoot} */parent.host : parent;
-    if (ref_node) {
-      insertBefore.call(container, node, ref_node);
-    } else {
-      appendChild.call(container, node);
-    }
-  }
-  _scheduleObserver(parent, node);
-  return node;
-}
-
-/**
-  Removes the given `node` from the element's `lightChildren`.
-  This method also performs dom composition.
-*/
-function removeChild$1(parent, node) {
-  if (node.parentNode !== parent) {
-    throw Error('The node to be removed is not a child of this node: ' + node);
-  }
-  if (!removeNode(node)) {
-    // if removing from a shadyRoot, remove form host instead
-    var container = isShadyRoot(parent) ? parent.host : parent;
-    // not guaranteed to physically be in container; e.g.
-    // undistributed nodes.
-    var nativeParent = parentNode(node);
-    if (container === nativeParent) {
-      removeChild.call(container, node);
-    }
-  }
-  _scheduleObserver(parent, null, node);
-  return node;
 }
 
 function cloneNode$1(node, deep) {
@@ -2545,7 +2422,8 @@ function retargetNonBubblingEvent(e) {
   var lastFiredRoot = void 0;
   for (var _i = 0; _i < path.length; _i++) {
     node = path[_i];
-    if (_i === 0 || node.shadowRoot && node.shadowRoot === lastFiredRoot) {
+    var root = node.__shady && node.__shady.root;
+    if (_i === 0 || root && root === lastFiredRoot) {
       fireHandlers(e, node, 'bubble');
       // don't bother with window, it doesn't have `getRootNode` and will be last in the path anyway
       if (node !== window) {
@@ -2575,6 +2453,19 @@ function findListener(wrappers, node, type, capture, once, passive) {
     }
   }
   return -1;
+}
+
+/**
+ * Firefox can throw on accessing __eventWrappers inside of `removeEventListener` during a selenium run
+ * Try/Catch accessing __eventWrappers to work around
+ * https://bugzilla.mozilla.org/show_bug.cgi?id=1353074
+ */
+function getEventWrappers(eventLike) {
+  var wrappers = null;
+  try {
+    wrappers = eventLike.__eventWrappers;
+  } catch (e) {} // eslint-disable-line no-empty
+  return wrappers;
 }
 
 /**
@@ -2608,9 +2499,10 @@ function addEventListener$1(type, fnOrObj, optionsOrCapture) {
   // will be set to shadyroot for event listener
   var target = optionsOrCapture && optionsOrCapture.__shadyTarget || this;
 
-  if (fnOrObj.__eventWrappers) {
+  var wrappers = fnOrObj.__eventWrappers;
+  if (wrappers) {
     // Stop if the wrapper function has already been created.
-    if (findListener(fnOrObj.__eventWrappers, target, type, capture, once, passive) > -1) {
+    if (findListener(wrappers, target, type, capture, once, passive) > -1) {
       return;
     }
   } else {
@@ -2709,12 +2601,13 @@ function removeEventListener$1(type, fnOrObj, optionsOrCapture) {
   var target = optionsOrCapture && optionsOrCapture.__shadyTarget || this;
   // Search the wrapped function.
   var wrapperFn = undefined;
-  if (fnOrObj.__eventWrappers) {
-    var idx = findListener(fnOrObj.__eventWrappers, target, type, capture, once, passive);
+  var wrappers = getEventWrappers(fnOrObj);
+  if (wrappers) {
+    var idx = findListener(wrappers, target, type, capture, once, passive);
     if (idx > -1) {
-      wrapperFn = fnOrObj.__eventWrappers.splice(idx, 1)[0].wrapperFn;
+      wrapperFn = wrappers.splice(idx, 1)[0].wrapperFn;
       // Cleanup.
-      if (!fnOrObj.__eventWrappers.length) {
+      if (!wrappers.length) {
         fnOrObj.__eventWrappers = undefined;
       }
     }
@@ -3004,242 +2897,19 @@ Code distributed by Google as part of the polymer project is also
 subject to an additional IP rights grant found at http://polymer.github.io/PATENTS.txt
 */
 
-// NOTE: normalize event contruction where necessary (IE11)
-var NormalizedEvent = typeof Event === 'function' ? Event : function (inType, params) {
-  params = params || {};
-  var e = document.createEvent('Event');
-  e.initEvent(inType, Boolean(params.bubbles), Boolean(params.cancelable));
-  return e;
-};
-
-var _class = function () {
-  function _class(root) {
-    classCallCheck(this, _class);
-
-    this.root = root;
-    this.insertionPointTag = 'slot';
-  }
-
-  createClass(_class, [{
-    key: 'getInsertionPoints',
-    value: function getInsertionPoints() {
-      return this.root.querySelectorAll(this.insertionPointTag);
-    }
-  }, {
-    key: 'isInsertionPoint',
-    value: function isInsertionPoint(node) {
-      return node.localName && node.localName == this.insertionPointTag;
-    }
-  }, {
-    key: 'distribute',
-    value: function distribute() {
-      if (this.root.hasInsertionPoint()) {
-        return this.distributePool(this.root, this.collectPool());
-      }
-      return [];
-    }
-
-    // Gather the pool of nodes that should be distributed. We will combine
-    // these with the "content root" to arrive at the composed tree.
-
-  }, {
-    key: 'collectPool',
-    value: function collectPool() {
-      var host = this.root.host;
-      var pool = [],
-          i = 0;
-      for (var n = host.firstChild; n; n = n.nextSibling) {
-        pool[i++] = n;
-      }
-      return pool;
-    }
-
-    // perform "logical" distribution; note, no actual dom is moved here,
-    // instead elements are distributed into storage
-    // array where applicable.
-
-  }, {
-    key: 'distributePool',
-    value: function distributePool(node, pool) {
-      var dirtyRoots = [];
-      var p$ = this.root._getInsertionPoints();
-      for (var i = 0, l = p$.length, p; i < l && (p = p$[i]); i++) {
-        this.distributeInsertionPoint(p, pool);
-        // provoke redistribution on insertion point parents
-        // must do this on all candidate hosts since distribution in this
-        // scope invalidates their distribution.
-        // only get logical parent.
-        var parent = p.parentNode;
-        var root = parent && parent.__shady && parent.__shady.root;
-        if (root && root.hasInsertionPoint()) {
-          dirtyRoots.push(root);
-        }
-      }
-      for (var _i = 0; _i < pool.length; _i++) {
-        var _p = pool[_i];
-        if (_p) {
-          _p.__shady = _p.__shady || {};
-          _p.__shady.assignedSlot = undefined;
-          // remove undistributed elements from physical dom.
-          var _parent = parentNode(_p);
-          if (_parent) {
-            removeChild.call(_parent, _p);
-          }
-        }
-      }
-      return dirtyRoots;
-    }
-  }, {
-    key: 'distributeInsertionPoint',
-    value: function distributeInsertionPoint(insertionPoint, pool) {
-      var prevAssignedNodes = insertionPoint.__shady.assignedNodes;
-      if (prevAssignedNodes) {
-        this.clearAssignedSlots(insertionPoint, true);
-      }
-      insertionPoint.__shady.assignedNodes = [];
-      var needsSlotChange = false;
-      // distribute nodes from the pool that this selector matches
-      var anyDistributed = false;
-      for (var i = 0, l = pool.length, node; i < l; i++) {
-        node = pool[i];
-        // skip nodes that were already used
-        if (!node) {
-          continue;
-        }
-        // distribute this node if it matches
-        if (this.matchesInsertionPoint(node, insertionPoint)) {
-          if (node.__shady._prevAssignedSlot != insertionPoint) {
-            needsSlotChange = true;
-          }
-          this.distributeNodeInto(node, insertionPoint);
-          // remove this node from the pool
-          pool[i] = undefined;
-          // since at least one node matched, we won't need fallback content
-          anyDistributed = true;
-        }
-      }
-      // Fallback content if nothing was distributed here
-      if (!anyDistributed) {
-        var children$$1 = insertionPoint.childNodes;
-        for (var j = 0, _node; j < children$$1.length; j++) {
-          _node = children$$1[j];
-          if (_node.__shady._prevAssignedSlot != insertionPoint) {
-            needsSlotChange = true;
-          }
-          this.distributeNodeInto(_node, insertionPoint);
-        }
-      }
-      // we're already dirty if a node was newly added to the slot
-      // and we're also dirty if the assigned count decreased.
-      if (prevAssignedNodes) {
-        // TODO(sorvell): the tracking of previously assigned slots
-        // could instead by done with a Set and then we could
-        // avoid needing to iterate here to clear the info.
-        for (var _i2 = 0; _i2 < prevAssignedNodes.length; _i2++) {
-          prevAssignedNodes[_i2].__shady._prevAssignedSlot = null;
-        }
-        if (insertionPoint.__shady.assignedNodes.length < prevAssignedNodes.length) {
-          needsSlotChange = true;
-        }
-      }
-      this.setDistributedNodesOnInsertionPoint(insertionPoint);
-      if (needsSlotChange) {
-        this._fireSlotChange(insertionPoint);
-      }
-    }
-  }, {
-    key: 'clearAssignedSlots',
-    value: function clearAssignedSlots(slot, savePrevious) {
-      var n$ = slot.__shady.assignedNodes;
-      if (n$) {
-        for (var i = 0; i < n$.length; i++) {
-          var n = n$[i];
-          if (savePrevious) {
-            n.__shady._prevAssignedSlot = n.__shady.assignedSlot;
-          }
-          // only clear if it was previously set to this slot;
-          // this helps ensure that if the node has otherwise been distributed
-          // ignore it.
-          if (n.__shady.assignedSlot === slot) {
-            n.__shady.assignedSlot = null;
-          }
-        }
-      }
-    }
-  }, {
-    key: 'matchesInsertionPoint',
-    value: function matchesInsertionPoint(node, insertionPoint) {
-      var slotName = insertionPoint.getAttribute('name');
-      slotName = slotName ? slotName.trim() : '';
-      var slot = node.getAttribute && node.getAttribute('slot');
-      slot = slot ? slot.trim() : '';
-      return slot == slotName;
-    }
-  }, {
-    key: 'distributeNodeInto',
-    value: function distributeNodeInto(child, insertionPoint) {
-      insertionPoint.__shady.assignedNodes.push(child);
-      child.__shady.assignedSlot = insertionPoint;
-    }
-  }, {
-    key: 'setDistributedNodesOnInsertionPoint',
-    value: function setDistributedNodesOnInsertionPoint(insertionPoint) {
-      var n$ = insertionPoint.__shady.assignedNodes;
-      insertionPoint.__shady.distributedNodes = [];
-      for (var i = 0, n; i < n$.length && (n = n$[i]); i++) {
-        if (this.isInsertionPoint(n)) {
-          var d$ = n.__shady.distributedNodes;
-          if (d$) {
-            for (var j = 0; j < d$.length; j++) {
-              insertionPoint.__shady.distributedNodes.push(d$[j]);
-            }
-          }
-        } else {
-          insertionPoint.__shady.distributedNodes.push(n$[i]);
-        }
-      }
-    }
-  }, {
-    key: '_fireSlotChange',
-    value: function _fireSlotChange(insertionPoint) {
-      // NOTE: cannot bubble correctly here so not setting bubbles: true
-      // Safari tech preview does not bubble but chrome does
-      // Spec says it bubbles (https://dom.spec.whatwg.org/#mutation-observers)
-      dispatchEvent.call(insertionPoint, new NormalizedEvent('slotchange'));
-      if (insertionPoint.__shady.assignedSlot) {
-        this._fireSlotChange(insertionPoint.__shady.assignedSlot);
-      }
-    }
-  }, {
-    key: 'isFinalDestination',
-    value: function isFinalDestination(insertionPoint) {
-      return !insertionPoint.__shady.assignedSlot;
-    }
-  }]);
-  return _class;
-}();
-
-/**
-@license
-Copyright (c) 2016 The Polymer Project Authors. All rights reserved.
-This code may only be used under the BSD style license found at http://polymer.github.io/LICENSE.txt
-The complete set of authors may be found at http://polymer.github.io/AUTHORS.txt
-The complete set of contributors may be found at http://polymer.github.io/CONTRIBUTORS.txt
-Code distributed by Google as part of the polymer project is also
-subject to an additional IP rights grant found at http://polymer.github.io/PATENTS.txt
-*/
-
 // Do not export this object. It must be passed as the first argument to the
 // ShadyRoot constructor in `attachShadow` to prevent the constructor from
 // throwing. This prevents the user from being able to manually construct a
 // ShadyRoot (i.e. `new ShadowRoot()`).
 var ShadyRootConstructionToken = {};
 
+var CATCHALL_NAME = '__catchall';
+
 /**
  * @constructor
  * @extends {ShadowRoot}
  */
-var ShadyRoot = function ShadyRoot(token, host) {
+var ShadyRoot = function ShadyRoot(token, host, options) {
   if (token !== ShadyRootConstructionToken) {
     throw new TypeError('Illegal constructor');
   }
@@ -3247,13 +2917,13 @@ var ShadyRoot = function ShadyRoot(token, host) {
   // DocumentFragment cannot be subclassed on older browsers.
   var shadowRoot = document.createDocumentFragment();
   shadowRoot.__proto__ = ShadyRoot.prototype;
-  /** @type {ShadyRoot} */shadowRoot._init(host);
+  /** @type {ShadyRoot} */shadowRoot._init(host, options);
   return shadowRoot;
 };
 
 ShadyRoot.prototype = Object.create(DocumentFragment.prototype);
 
-ShadyRoot.prototype._init = function (host) {
+ShadyRoot.prototype._init = function (host, options) {
   // NOTE: set a fake local name so this element can be
   // distinguished from a DocumentFragment when patching.
   // FF doesn't allow this to be `localName`
@@ -3262,24 +2932,31 @@ ShadyRoot.prototype._init = function (host) {
   recordChildNodes(host);
   recordChildNodes(this);
   // root <=> host
-  host.shadowRoot = this;
   this.host = host;
+  this._mode = options && options.mode;
+  host.__shady = host.__shady || {};
+  host.__shady.root = this;
+  host.__shady.publicRoot = this._mode !== 'closed' ? this : null;
   // state flags
   this._renderPending = false;
   this._hasRendered = false;
-  this._changePending = false;
-  this._distributor = new _class(this);
-  this.update();
+  this._slotList = [];
+  this._slotMap = null;
+  // fast path initial render: remove existing physical dom.
+  var c$ = childNodes(host);
+  for (var i = 0, l = c$.length; i < l; i++) {
+    removeChild.call(host, c$[i]);
+  }
 };
 
 // async render
-ShadyRoot.prototype.update = function () {
+ShadyRoot.prototype._asyncRender = function () {
   var _this = this;
 
   if (!this._renderPending) {
     this._renderPending = true;
     enqueue(function () {
-      return _this.render();
+      return _this._render();
     });
   }
 };
@@ -3305,115 +2982,196 @@ ShadyRoot.prototype._rendererForHost = function () {
     var c$ = this.host.childNodes;
     for (var i = 0, c; i < c$.length; i++) {
       c = c$[i];
-      if (this._distributor.isInsertionPoint(c)) {
+      if (this._isInsertionPoint(c)) {
         return root;
       }
     }
   }
 };
 
-ShadyRoot.prototype.render = function () {
+ShadyRoot.prototype._render = function () {
   if (this._renderPending) {
-    this._getRenderRoot()['_render']();
+    this._getRenderRoot()['_renderRoot']();
   }
 };
 
 // NOTE: avoid renaming to ease testability.
-ShadyRoot.prototype['_render'] = function () {
+ShadyRoot.prototype['_renderRoot'] = function () {
   this._renderPending = false;
-  this._changePending = false;
-  if (!this._skipUpdateInsertionPoints) {
-    this.updateInsertionPoints();
-  } else if (!this._hasRendered) {
-    this.__insertionPoints = [];
-  }
-  this._skipUpdateInsertionPoints = false;
-  // TODO(sorvell): can add a first render optimization here
-  // to use if there are no insertion points
-  // 1. clear host node of composed children
-  // 2. appendChild the shadowRoot itself or (more robust) its logical children
-  // NOTE: this didn't seem worth it in perf testing
-  // but not ready to delete this info.
-  // logical
-  this.distribute();
-  // physical
-  this.compose();
+  this._distribute();
+  this._compose();
   this._hasRendered = true;
 };
 
-ShadyRoot.prototype.forceRender = function () {
-  this._renderPending = true;
-  this.render();
-};
-
-ShadyRoot.prototype.distribute = function () {
-  var dirtyRoots = this._distributor.distribute();
-  for (var i = 0; i < dirtyRoots.length; i++) {
-    dirtyRoots[i]['_render']();
+ShadyRoot.prototype._distribute = function () {
+  // capture # of previously assigned nodes to help determine if dirty.
+  for (var i = 0, slot; i < this._slotList.length; i++) {
+    slot = this._slotList[i];
+    this._clearSlotAssignedNodes(slot);
+  }
+  // distribute host children.
+  for (var n = this.host.firstChild; n; n = n.nextSibling) {
+    this._distributeNodeToSlot(n);
+  }
+  // fallback content, slotchange, and dirty roots
+  for (var _i = 0, _slot; _i < this._slotList.length; _i++) {
+    _slot = this._slotList[_i];
+    // distribute fallback content
+    if (!_slot.__shady.assignedNodes.length) {
+      for (var _n = _slot.firstChild; _n; _n = _n.nextSibling) {
+        this._distributeNodeToSlot(_n, _slot);
+      }
+    }
+    var slotParent = _slot.parentNode;
+    var slotParentRoot = slotParent.__shady && slotParent.__shady.root;
+    if (slotParentRoot && slotParentRoot._hasInsertionPoint()) {
+      slotParentRoot['_renderRoot']();
+    }
+    this._addAssignedToFlattenedNodes(_slot.__shady.flattenedNodes, _slot.__shady.assignedNodes);
+    var prevAssignedNodes = _slot.__shady._previouslyAssignedNodes;
+    if (prevAssignedNodes) {
+      for (var _i2 = 0; _i2 < prevAssignedNodes.length; _i2++) {
+        prevAssignedNodes[_i2].__shady._prevAssignedSlot = null;
+      }
+      _slot.__shady._previouslyAssignedNodes = null;
+      // dirty if previously less assigned nodes than previously assigned.
+      if (prevAssignedNodes.length > _slot.__shady.assignedNodes.length) {
+        _slot.__shady.dirty = true;
+      }
+    }
+    /* Note: A slot is marked dirty whenever a node is newly assigned to it
+    or a node is assigned to a different slot (done in `_distributeNodeToSlot`)
+    or if the number of nodes assigned to the slot has decreased (done above);
+     */
+    if (_slot.__shady.dirty) {
+      _slot.__shady.dirty = false;
+      this._fireSlotChange(_slot);
+    }
   }
 };
 
-ShadyRoot.prototype.updateInsertionPoints = function () {
-  var i$ = this._insertionPoints;
-  // if any insertion points have been removed, clear their distribution info
-  if (i$) {
-    for (var i = 0, c; i < i$.length; i++) {
-      c = i$[i];
-      if (c.getRootNode() !== this) {
-        this._distributor.clearAssignedSlots(c);
+/**
+ * Distributes given `node` to the appropriate slot based on its `slot`
+ * attribute. If `forcedSlot` is given, then the node is distributed to the
+ * `forcedSlot`.
+ * Note: slot to which the node is assigned will be marked dirty for firing
+ * `slotchange`.
+ * @param {Node} node
+ * @param {Node=} forcedSlot
+ *
+ */
+ShadyRoot.prototype._distributeNodeToSlot = function (node, forcedSlot) {
+  node.__shady = node.__shady || {};
+  var oldSlot = node.__shady._prevAssignedSlot;
+  node.__shady._prevAssignedSlot = null;
+  var slot = forcedSlot;
+  if (!slot) {
+    var name = node.slot || CATCHALL_NAME;
+    var list = this._slotMap[name];
+    slot = list && list[0];
+  }
+  if (slot) {
+    slot.__shady.assignedNodes.push(node);
+    node.__shady.assignedSlot = slot;
+  } else {
+    node.__shady.assignedSlot = undefined;
+  }
+  if (oldSlot !== node.__shady.assignedSlot) {
+    if (node.__shady.assignedSlot) {
+      node.__shady.assignedSlot.__shady.dirty = true;
+    }
+  }
+};
+
+/**
+ * Clears the assignedNodes tracking data for a given `slot`. Note, the current
+ * assigned node data is tracked (via _previouslyAssignedNodes and
+ * _prevAssignedSlot) to see if `slotchange` should fire. This data may be out
+ *  of date at this time because the assigned nodes may have already been
+ * distributed to another root. This is ok since this data is only used to
+ * track changes.
+ * @param {HTMLSlotElement} slot
+ */
+ShadyRoot.prototype._clearSlotAssignedNodes = function (slot) {
+  var n$ = slot.__shady.assignedNodes;
+  slot.__shady.assignedNodes = [];
+  slot.__shady.flattenedNodes = [];
+  slot.__shady._previouslyAssignedNodes = n$;
+  if (n$) {
+    for (var i = 0; i < n$.length; i++) {
+      var n = n$[i];
+      n.__shady._prevAssignedSlot = n.__shady.assignedSlot;
+      // only clear if it was previously set to this slot;
+      // this helps ensure that if the node has otherwise been distributed
+      // ignore it.
+      if (n.__shady.assignedSlot === slot) {
+        n.__shady.assignedSlot = null;
       }
     }
   }
-  i$ = this._insertionPoints = this._distributor.getInsertionPoints();
-  // ensure insertionPoints's and their parents have logical dom info.
-  // save logical tree info
-  // a. for shadyRoot
-  // b. for insertion points (fallback)
-  // c. for parents of insertion points
-  for (var _i = 0, _c; _i < i$.length; _i++) {
-    _c = i$[_i];
-    _c.__shady = _c.__shady || {};
-    recordChildNodes(_c);
-    recordChildNodes(_c.parentNode);
+};
+
+ShadyRoot.prototype._addAssignedToFlattenedNodes = function (flattened, asssigned) {
+  for (var i = 0, n; i < asssigned.length && (n = asssigned[i]); i++) {
+    if (n.localName == 'slot') {
+      this._addAssignedToFlattenedNodes(flattened, n.__shady.assignedNodes);
+    } else {
+      flattened.push(asssigned[i]);
+    }
   }
 };
 
-ShadyRoot.prototype.compose = function () {
-  // compose self
-  // note: it's important to mark this clean before distribution
-  // so that attachment that provokes additional distribution (e.g.
-  // adding something to your parentNode) works
-  this._composeTree();
-  // TODO(sorvell): See fast paths here in Polymer v1
-  // (these seem unnecessary)
+ShadyRoot.prototype._fireSlotChange = function (slot) {
+  // NOTE: cannot bubble correctly here so not setting bubbles: true
+  // Safari tech preview does not bubble but chrome does
+  // Spec says it bubbles (https://dom.spec.whatwg.org/#mutation-observers)
+  dispatchEvent.call(slot, new Event('slotchange'));
+  if (slot.__shady.assignedSlot) {
+    this._fireSlotChange(slot.__shady.assignedSlot);
+  }
 };
 
 // Reify dom such that it is at its correct rendering position
 // based on logical distribution.
-ShadyRoot.prototype._composeTree = function () {
-  this._updateChildNodes(this.host, this._composeNode(this.host));
-  var p$ = this._getInsertionPoints();
-  for (var i = 0, l = p$.length, p, parent; i < l && (p = p$[i]); i++) {
-    parent = p.parentNode;
-    if (parent !== this.host && parent !== this) {
-      this._updateChildNodes(parent, this._composeNode(parent));
+// NOTE: here we only compose parents of <slot> elements and not the
+// shadowRoot into the host. The latter is performend via a fast path
+// in the `logical-mutation`.insertBefore.
+ShadyRoot.prototype._compose = function () {
+  var slots = this._slotList;
+  var composeList = [];
+  for (var i = 0; i < slots.length; i++) {
+    var parent = slots[i].parentNode;
+    /* compose node only if:
+      (1) parent does not have a shadowRoot since shadowRoot has already
+      composed into the host
+      (2) we're not already composing it
+      [consider (n^2) but rare better than Set]
+    */
+    if (!(parent.__shady && parent.__shady.root) && composeList.indexOf(parent) < 0) {
+      composeList.push(parent);
     }
+  }
+  for (var _i3 = 0; _i3 < composeList.length; _i3++) {
+    var node = composeList[_i3];
+    var targetNode = node === this ? this.host : node;
+    this._updateChildNodes(targetNode, this._composeNode(node));
   }
 };
 
 // Returns the list of nodes which should be rendered inside `node`.
 ShadyRoot.prototype._composeNode = function (node) {
   var children$$1 = [];
-  var c$ = (node.__shady && node.__shady.root || node).childNodes;
+  var c$ = node.childNodes;
   for (var i = 0; i < c$.length; i++) {
     var child = c$[i];
-    if (this._distributor.isInsertionPoint(child)) {
-      var distributedNodes = child.__shady.distributedNodes || (child.__shady.distributedNodes = []);
-      for (var j = 0; j < distributedNodes.length; j++) {
-        var distributedNode = distributedNodes[j];
-        if (this.isFinalDestination(child, distributedNode)) {
-          children$$1.push(distributedNode);
-        }
+    // Note: if we see a slot here, the nodes are guaranteed to need to be
+    // composed here. This is because if there is redistribution, it has
+    // already been handled by this point.
+    if (this._isInsertionPoint(child)) {
+      var flattenedNodes = child.__shady.flattenedNodes;
+      for (var j = 0; j < flattenedNodes.length; j++) {
+        var distributedNode = flattenedNodes[j];
+        children$$1.push(distributedNode);
       }
     } else {
       children$$1.push(child);
@@ -3422,8 +3180,8 @@ ShadyRoot.prototype._composeNode = function (node) {
   return children$$1;
 };
 
-ShadyRoot.prototype.isFinalDestination = function (insertionPoint, node) {
-  return this._distributor.isFinalDestination(insertionPoint, node);
+ShadyRoot.prototype._isInsertionPoint = function (node) {
+  return node.localName == 'slot';
 };
 
 // Ensures that the rendered node list inside `container` is `children`.
@@ -3445,31 +3203,162 @@ ShadyRoot.prototype._updateChildNodes = function (container, children$$1) {
     d -= s.addedCount;
   }
   // process adds
-  for (var _i2 = 0, _s, next; _i2 < splices.length && (_s = splices[_i2]); _i2++) {
+  for (var _i4 = 0, _s, next; _i4 < splices.length && (_s = splices[_i4]); _i4++) {
     //eslint-disable-line no-redeclare
     next = composed[_s.index];
-    for (var _j = _s.index, _n; _j < _s.index + _s.addedCount; _j++) {
-      _n = children$$1[_j];
-      insertBefore.call(container, _n, next);
-      // TODO(sorvell): is this splice strictly needed?
-      composed.splice(_j, 0, _n);
+    for (var _j = _s.index, _n2; _j < _s.index + _s.addedCount; _j++) {
+      _n2 = children$$1[_j];
+      insertBefore.call(container, _n2, next);
+      composed.splice(_j, 0, _n2);
     }
   }
 };
 
-ShadyRoot.prototype.getInsertionPointTag = function () {
-  return this._distributor.insertionPointTag;
-};
-
-ShadyRoot.prototype.hasInsertionPoint = function () {
-  return Boolean(this._insertionPoints && this._insertionPoints.length);
-};
-
-ShadyRoot.prototype._getInsertionPoints = function () {
-  if (!this._insertionPoints) {
-    this.updateInsertionPoints();
+/**
+ * Adds the given slots. Slots are maintained in an dom-ordered list.
+ * In addition a map of name to slot is updated.
+ */
+ShadyRoot.prototype._addSlots = function (slots) {
+  var slotNamesToSort = void 0;
+  this._slotMap = this._slotMap || {};
+  this._slotList = this._slotList || [];
+  for (var i = 0; i < slots.length; i++) {
+    var slot = slots[i];
+    // ensure insertionPoints's and their parents have logical dom info.
+    // save logical tree info
+    // a. for shadyRoot
+    // b. for insertion points (fallback)
+    // c. for parents of insertion points
+    slot.__shady = slot.__shady || {};
+    recordChildNodes(slot);
+    recordChildNodes(slot.parentNode);
+    var name = this._nameForSlot(slot);
+    if (this._slotMap[name]) {
+      slotNamesToSort = slotNamesToSort || {};
+      slotNamesToSort[name] = true;
+      this._slotMap[name].push(slot);
+    } else {
+      this._slotMap[name] = [slot];
+    }
+    this._slotList.push(slot);
   }
-  return this._insertionPoints;
+  if (slotNamesToSort) {
+    for (var n in slotNamesToSort) {
+      this._slotMap[n] = this._sortSlots(this._slotMap[n]);
+    }
+  }
+};
+
+ShadyRoot.prototype._nameForSlot = function (slot) {
+  var name = slot['name'] || slot.getAttribute('name') || CATCHALL_NAME;
+  slot.__slotName = name;
+  return name;
+};
+
+/**
+ * Slots are kept in an ordered list. Slots with the same name
+ * are sorted here by tree order.
+ */
+ShadyRoot.prototype._sortSlots = function (slots) {
+  // NOTE: Cannot use `compareDocumentPosition` because it's not polyfilled,
+  // but the code here could be used to polyfill the preceeding/following info
+  // in `compareDocumentPosition`.
+  return slots.sort(function (a, b) {
+    var listA = ancestorList(a);
+    var listB = ancestorList(b);
+    for (var i = 0; i < listA.length; i++) {
+      var nA = listA[i];
+      var nB = listB[i];
+      if (nA !== nB) {
+        var c$ = Array.from(nA.parentNode.childNodes);
+        return c$.indexOf(nA) - c$.indexOf(nB);
+      }
+    }
+  });
+};
+
+function ancestorList(node) {
+  var ancestors = [];
+  do {
+    ancestors.unshift(node);
+  } while (node = node.parentNode);
+  return ancestors;
+}
+
+// NOTE: could be used to help polyfill `document.contains`.
+function contains(container, node) {
+  while (node) {
+    if (node == container) {
+      return true;
+    }
+    node = node.parentNode;
+  }
+}
+
+/**
+ * Removes from tracked slot data any slots contained within `container` and
+ * then updates the tracked data (_slotList and _slotMap).
+ * Any removed slots also have their `assignedNodes` removed from comopsed dom.
+ */
+ShadyRoot.prototype._removeContainedSlots = function (container) {
+  var didRemove = void 0;
+  this._slotMap = this._slotMap || {};
+  this._slotList = this._slotList || [];
+  var map = this._slotMap;
+  for (var n in map) {
+    var slots = map[n];
+    for (var i = 0; i < slots.length; i++) {
+      var slot = slots[i];
+      if (contains(container, slot)) {
+        slots.splice(i, 1);
+        var x = this._slotList.indexOf(slot);
+        if (x >= 0) {
+          this._slotList.splice(x, 1);
+        }
+        i--;
+        this._removeFlattenedNodes(slot);
+        didRemove = true;
+      }
+    }
+  }
+  return didRemove;
+};
+
+ShadyRoot.prototype._updateSlotName = function (slot) {
+  var oldName = slot.__slotName;
+  var name = this._nameForSlot(slot);
+  if (name === oldName) {
+    return;
+  }
+  // remove from existing tracking
+  var slots = this._slotMap[oldName];
+  var i = slots.indexOf(slot);
+  if (i >= 0) {
+    slots.splice(i, 1);
+  }
+  // add to new location and sort if nedessary
+  var list = this._slotMap[name] || (this._slotMap[name] = []);
+  list.push(slot);
+  if (list.length > 1) {
+    this._slotMap[name] = this._sortSlots(list);
+  }
+};
+
+ShadyRoot.prototype._removeFlattenedNodes = function (slot) {
+  var n$ = slot.__shady.flattenedNodes;
+  if (n$) {
+    for (var i = 0; i < n$.length; i++) {
+      var node = n$[i];
+      var parent = parentNode(node);
+      if (parent) {
+        removeChild.call(parent, node);
+      }
+    }
+  }
+};
+
+ShadyRoot.prototype._hasInsertionPoint = function () {
+  return Boolean(this._slotList.length);
 };
 
 ShadyRoot.prototype.addEventListener = function (type, fn, optionsOrCapture) {
@@ -3493,7 +3382,12 @@ ShadyRoot.prototype.removeEventListener = function (type, fn, optionsOrCapture) 
 };
 
 ShadyRoot.prototype.getElementById = function (id) {
-  return this.querySelector('#' + id);
+  var result = query(this, function (n) {
+    return n.id == id;
+  }, function (n) {
+    return Boolean(n);
+  })[0];
+  return result || null;
 };
 
 /**
@@ -3507,7 +3401,7 @@ function attachShadow(host, options) {
   if (!options) {
     throw 'Not enough arguments.';
   }
-  return new ShadyRoot(ShadyRootConstructionToken, host);
+  return new ShadyRoot(ShadyRootConstructionToken, host, options);
 }
 
 patchShadowRootAccessors(ShadyRoot.prototype);
@@ -3559,8 +3453,8 @@ var nodeMixin = {
    * @this {Node}
    */
   replaceChild: function replaceChild(node, ref_node) {
-    this.insertBefore(node, ref_node);
-    this.removeChild(ref_node);
+    insertBefore$1(this, node, ref_node);
+    removeChild$1(this, ref_node);
     return node;
   },
 
@@ -3607,7 +3501,7 @@ var nodeMixin = {
   }
 };
 
-// NOTE: For some reason `Text` redefines `assignedSlot`
+// NOTE: For some reason 'Text' redefines 'assignedSlot'
 var textMixin = {
   /**
    * @this {Text}
@@ -3623,7 +3517,7 @@ var fragmentMixin = {
   /**
    * @this {DocumentFragment}
    */
-  querySelector: function querySelector(selector) {
+  querySelector: function querySelector$$1(selector) {
     // match selector and halt on first result.
     var result = query(this, function (n) {
       return matchesSelector(n, selector);
@@ -3637,7 +3531,7 @@ var fragmentMixin = {
   /**
    * @this {DocumentFragment}
    */
-  querySelectorAll: function querySelectorAll(selector) {
+  querySelectorAll: function querySelectorAll$$1(selector) {
     return query(this, function (n) {
       return matchesSelector(n, selector);
     });
@@ -3652,7 +3546,7 @@ var slotMixin = {
   assignedNodes: function assignedNodes(options) {
     if (this.localName === 'slot') {
       renderRootNode(this);
-      return this.__shady ? (options && options.flatten ? this.__shady.distributedNodes : this.__shady.assignedNodes) || [] : [];
+      return this.__shady ? (options && options.flatten ? this.__shady.flattenedNodes : this.__shady.assignedNodes) || [] : [];
     }
   }
 };
@@ -3694,7 +3588,7 @@ var elementMixin = extendAll({
    * @this {HTMLElement}
    */
   set slot(value) {
-    this.setAttribute('slot', value);
+    setAttribute$1(this, 'slot', value);
   },
 
   /**
@@ -3721,7 +3615,12 @@ var documentMixin = extendAll({
    * @this {Document}
    */
   getElementById: function getElementById(id) {
-    return this.querySelector('#' + id);
+    var result = query(this, function (n) {
+      return n.id == id;
+    }, function (n) {
+      return Boolean(n);
+    })[0];
+    return result || null;
   }
 }, fragmentMixin);
 
@@ -3736,7 +3635,7 @@ var htmlElementMixin = extendAll({
    * @this {HTMLElement}
    */
   blur: function blur() {
-    var root = this.shadowRoot;
+    var root = this.__shady && this.__shady.root;
     var shadowActive = root && root.activeElement;
     if (shadowActive) {
       shadowActive.blur();
@@ -4181,7 +4080,10 @@ var CustomElementInternals = function () {
      *     Reactions in the popped stack are invoked.)
      *
      * @param {!Node} root
-     * @param {!Set<Node>=} visitedImports
+     * @param {{
+     *   visitedImports: (!Set<!Node>|undefined),
+     *   upgrade: (!function(!Element)|undefined),
+     * }=} options
      */
 
   }, {
@@ -4189,7 +4091,12 @@ var CustomElementInternals = function () {
     value: function patchAndUpgradeTree(root) {
       var _this2 = this;
 
-      var visitedImports = arguments.length > 1 && arguments[1] !== undefined ? arguments[1] : new Set();
+      var options = arguments.length > 1 && arguments[1] !== undefined ? arguments[1] : {};
+
+      var visitedImports = options.visitedImports || new Set();
+      var upgrade = options.upgrade || function (element) {
+        return _this2.upgradeElement(element);
+      };
 
       var elements = [];
 
@@ -4226,7 +4133,7 @@ var CustomElementInternals = function () {
               var clonedVisitedImports = new Set(visitedImports);
               visitedImports.delete(importNode);
 
-              _this2.patchAndUpgradeTree(importNode, visitedImports);
+              _this2.patchAndUpgradeTree(importNode, { visitedImports: visitedImports, upgrade: upgrade });
             });
           }
         } else {
@@ -4245,7 +4152,7 @@ var CustomElementInternals = function () {
       }
 
       for (var _i = 0; _i < elements.length; _i++) {
-        this.upgradeElement(elements[_i]);
+        upgrade(elements[_i]);
       }
     }
 
@@ -4529,9 +4436,9 @@ var CustomElementRegistry = function () {
 
     /**
      * @private
-     * @type {!Array<string>}
+     * @type {!Array<!CustomElementDefinition>}
      */
-    this._unflushedLocalNames = [];
+    this._pendingDefinitions = [];
 
     /**
      * @private
@@ -4610,9 +4517,7 @@ var CustomElementRegistry = function () {
         constructionStack: []
       };
 
-      this._internals.setDefinition(localName, definition);
-
-      this._unflushedLocalNames.push(localName);
+      this._pendingDefinitions.push(definition);
 
       // If we've already called the flush callback and it hasn't called back yet,
       // don't call it again.
@@ -4626,16 +4531,51 @@ var CustomElementRegistry = function () {
   }, {
     key: '_flush',
     value: function _flush() {
+      var _this2 = this;
+
       // If no new definitions were defined, don't attempt to flush. This could
       // happen if a flush callback keeps the function it is given and calls it
       // multiple times.
       if (this._flushPending === false) return;
-
       this._flushPending = false;
-      this._internals.patchAndUpgradeTree(document);
 
-      while (this._unflushedLocalNames.length > 0) {
-        var localName = this._unflushedLocalNames.shift();
+      var pendingDefinitions = this._pendingDefinitions;
+      /** @type {!Map<string, !Array<!Element>>} */
+      var localNameToUpgradableElements = new Map();
+      for (var i = 0; i < pendingDefinitions.length; i++) {
+        localNameToUpgradableElements.set(pendingDefinitions[i].localName, []);
+      }
+
+      this._internals.patchAndUpgradeTree(document, {
+        upgrade: function upgrade(element) {
+          // Attempt to upgrade using *non-pending* definitions.
+          _this2._internals.upgradeElement(element);
+
+          // If the element was upgraded, then no pending definition applies to it.
+          if (element.__CE_state !== undefined) return;
+
+          // If there is an applicable pending definition for the element, add the
+          // element to the set of upgradable elements for that definition.
+          var upgradableElements = localNameToUpgradableElements.get(element.localName);
+          if (upgradableElements) {
+            upgradableElements.push(element);
+          }
+        }
+      });
+
+      while (pendingDefinitions.length > 0) {
+        var definition = pendingDefinitions.shift();
+        var localName = definition.localName;
+
+        this._internals.setDefinition(localName, definition);
+
+        // Attempt to upgrade all applicable elements.
+        var upgradableElements = localNameToUpgradableElements.get(definition.localName);
+        for (var _i = 0; _i < upgradableElements.length; _i++) {
+          this._internals.upgradeElement(upgradableElements[_i]);
+        }
+
+        // Resolve any promises created by `whenDefined` for the definition.
         var deferred = this._whenDefinedDeferred.get(localName);
         if (deferred) {
           deferred.resolve(undefined);
@@ -4683,7 +4623,9 @@ var CustomElementRegistry = function () {
       // Resolve immediately only if the given local name has a definition *and*
       // the full document walk to upgrade elements with that local name has
       // already happened.
-      if (definition && this._unflushedLocalNames.indexOf(localName) === -1) {
+      if (definition && !this._pendingDefinitions.some(function (d) {
+        return d.localName === localName;
+      })) {
         deferred.resolve(undefined);
       }
 
@@ -5820,24 +5762,31 @@ subject to an additional IP rights grant found at http://polymer.github.io/PATEN
 */
 
 var nativeShadow = !(window['ShadyDOM'] && window['ShadyDOM']['inUse']);
-// chrome 49 has semi-working css vars, check if box-shadow works
-// safari 9.1 has a recalc bug: https://bugs.webkit.org/show_bug.cgi?id=155782
-var nativeCssVariables = !navigator.userAgent.match('AppleWebKit/601') && window.CSS && CSS.supports && CSS.supports('box-shadow', '0 0 0 var(--foo)');
+var nativeCssVariables = void 0;
 
 /**
- * @param {ShadyCSSOptions | ShadyCSSInterface | undefined} settings
+ * @param {(ShadyCSSOptions | ShadyCSSInterface)=} settings
  */
-function parseSettings(settings) {
-  if (settings) {
-    nativeCssVariables = nativeCssVariables && !settings['nativeCss'] && !settings['shimcssproperties'];
-    nativeShadow = nativeShadow && !settings['nativeShadow'] && !settings['shimshadow'];
+function calcCssVariables(settings) {
+  if (settings && settings['shimcssproperties']) {
+    nativeCssVariables = false;
+  } else {
+    // chrome 49 has semi-working css vars, check if box-shadow works
+    // safari 9.1 has a recalc bug: https://bugs.webkit.org/show_bug.cgi?id=155782
+    // However, shim css custom properties are only supported with ShadyDOM enabled,
+    // so fall back on native if we do not detect ShadyDOM
+    nativeCssVariables = nativeShadow || Boolean(!navigator.userAgent.match('AppleWebKit/601') && window.CSS && CSS.supports && CSS.supports('box-shadow', '0 0 0 var(--foo)'));
   }
 }
 
-if (window.ShadyCSS) {
-  parseSettings(window.ShadyCSS);
-} else if (window['WebComponents']) {
-  parseSettings(window['WebComponents']['flags']);
+if (window.ShadyCSS && window.ShadyCSS.nativeCss !== undefined) {
+  nativeCssVariables = window.ShadyCSS.nativeCss;
+} else if (window.ShadyCSS) {
+  calcCssVariables(window.ShadyCSS);
+  // reset window variable to let ShadyCSS API take its place
+  window.ShadyCSS = undefined;
+} else {
+  calcCssVariables(window['WebComponents'] && window['WebComponents']['flags']);
 }
 
 /**
@@ -5850,11 +5799,11 @@ Code distributed by Google as part of the polymer project is also
 subject to an additional IP rights grant found at http://polymer.github.io/PATENTS.txt
 */
 
-var VAR_ASSIGN = /(?:^|[;\s{]\s*)(--[\w-]*?)\s*:\s*(?:([^;{]*)|{([^}]*)})(?:(?=[;\s}])|$)/gi;
+var VAR_ASSIGN = /(?:^|[;\s{]\s*)(--[\w-]*?)\s*:\s*(?:((?:'(?:\\'|.)*?'|"(?:\\"|.)*?"|\([^)]*?\)|[^};{])+)|\{([^}]*)\}(?:(?=[;\s}])|$))/gi;
 var MIXIN_MATCH = /(?:^|\W+)@apply\s*\(?([^);\n]*)\)?/gi;
 var VAR_CONSUMED = /(--[\w-]+)\s*([:,;)]|$)/gi;
 var ANIMATION_MATCH = /(animation\s*:)|(animation-name\s*:)/;
-var MEDIA_MATCH = /@media[^(]*(\([^)]*\))/;
+var MEDIA_MATCH = /@media\s(.*)/;
 
 var BRACKETED = /\{[^}]*\}/g;
 var HOST_PREFIX = '(?:^|[^.#[:])';
@@ -6465,7 +6414,7 @@ var StyleTransformer = function () {
 var NTH = /:(nth[-\w]+)\(([^)]+)\)/;
 var SCOPE_DOC_SELECTOR = ':not(.' + SCOPE_NAME + ')';
 var COMPLEX_SELECTOR_SEP = ',';
-var SIMPLE_SELECTOR_SEP = /(^|[\s>+~]+)((?:\[.+?\]|[^\s>+~=\[])+)/g;
+var SIMPLE_SELECTOR_SEP = /(^|[\s>+~]+)((?:\[.+?\]|[^\s>+~=[])+)/g;
 var SIMPLE_SELECTOR_PREFIX = /[[.:#*]/;
 var HOST = ':host';
 var ROOT = ':root';
@@ -7640,7 +7589,6 @@ subject to an additional IP rights grant found at http://polymer.github.io/PATEN
  * @param {Element} element
  * @param {Object=} properties
  */
-
 function updateNativeProperties(element, properties) {
   // remove previous properties
   for (var p in properties) {
@@ -7658,6 +7606,20 @@ function updateNativeProperties(element, properties) {
  * @param {string} property
  * @return {string}
  */
+
+
+/**
+ * return true if `cssText` contains a mixin definition or consumption
+ * @param {string} cssText
+ * @return {boolean}
+ */
+function detectMixin(cssText) {
+  var has = MIXIN_MATCH.test(cssText) || VAR_ASSIGN.test(cssText);
+  // reset state of the regexes
+  MIXIN_MATCH.lastIndex = 0;
+  VAR_ASSIGN.lastIndex = 0;
+  return has;
+}
 
 /**
 @license
@@ -7769,15 +7731,7 @@ var CustomStyleInterface$1 = function () {
         if (style) {
           // HTMLImports polyfill may have cloned the style into the main document,
           // which is referenced with __appliedElement.
-          // Also, we must copy over the attributes.
-          var appliedStyle = /** @type {HTMLStyleElement} */style['__appliedElement'];
-          if (appliedStyle) {
-            for (var _i = 0; _i < style.attributes.length; _i++) {
-              var attr = style.attributes[_i];
-              appliedStyle.setAttribute(attr.name, attr.value);
-            }
-          }
-          var styleToTransform = appliedStyle || style;
+          var styleToTransform = /** @type {!HTMLStyleElement} */style['__appliedElement'] || style;
           if (transformFn) {
             transformFn(styleToTransform);
           }
@@ -7946,10 +7900,10 @@ var ScopingShim = function () {
       }
       // check if the styling has mixin definitions or uses
       this._ensure();
-      var hasMixins = this._applyShim['detectMixin'](cssText);
+      var hasMixins = detectMixin(cssText);
       var ast = parse(cssText);
       // only run the applyshim transforms if there is a mixin involved
-      if (hasMixins && nativeCssVariables) {
+      if (hasMixins && nativeCssVariables && this._applyShim) {
         this._applyShim['transformRules'](ast, elementName);
       }
       template['_styleAst'] = ast;
@@ -8002,12 +7956,6 @@ var ScopingShim = function () {
       } else if (window.ShadyCSS && window.ShadyCSS.ApplyShim) {
         this._applyShim = window.ShadyCSS.ApplyShim;
         this._applyShim['invalidCallback'] = invalidate;
-      } else {
-        var _applyShim;
-
-        this._applyShim = (_applyShim = {}, defineProperty(_applyShim, 'detectMixin', function detectMixin(str) {
-          return false;
-        }), defineProperty(_applyShim, 'transformRule', function transformRule(ast) {}), defineProperty(_applyShim, 'transformRules', function transformRules(ast, name) {}), _applyShim);
       }
     }
   }, {
@@ -8030,12 +7978,6 @@ var ScopingShim = function () {
             }
           });
         };
-      } else {
-        var _customStyleInterface;
-
-        this._customStyleInterface = (_customStyleInterface = {}, defineProperty(_customStyleInterface, 'processStyles', function processStyles() {}), defineProperty(_customStyleInterface, 'enqueued', false), defineProperty(_customStyleInterface, 'getStyleForCustomStyle', function getStyleForCustomStyle(s) {
-          return null;
-        }), _customStyleInterface);
       }
     }
   }, {
@@ -8052,6 +7994,9 @@ var ScopingShim = function () {
     key: 'flushCustomStyles',
     value: function flushCustomStyles() {
       this._ensure();
+      if (!this._customStyleInterface) {
+        return;
+      }
       var customStyles = this._customStyleInterface['processStyles']();
       // early return if custom-styles don't need validation
       if (!this._customStyleInterface['enqueued']) {
@@ -8112,7 +8057,7 @@ var ScopingShim = function () {
           // update template
           if (!templateIsValidating(template)) {
             this._ensure();
-            this._applyShim['transformRules'](template['_styleAst'], is);
+            this._applyShim && this._applyShim['transformRules'](template['_styleAst'], is);
             template._style.textContent = StyleTransformer$1.elementStyles(host, styleInfo.styleRules);
             startValidatingTemplate(template);
           }
@@ -8274,7 +8219,7 @@ var ScopingShim = function () {
         }
         if (nativeCssVariables) {
           _this3._ensure();
-          _this3._applyShim['transformRule'](rule);
+          _this3._applyShim && _this3._applyShim['transformRule'](rule);
         }
       });
       if (nativeCssVariables) {
@@ -8286,7 +8231,7 @@ var ScopingShim = function () {
   }, {
     key: '_revalidateApplyShim',
     value: function _revalidateApplyShim(style) {
-      if (nativeCssVariables) {
+      if (nativeCssVariables && this._applyShim) {
         var ast = rulesForStyle(style);
         this._ensure();
         this._applyShim['transformRules'](ast);

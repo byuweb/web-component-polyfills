@@ -14,6 +14,8 @@
     "@webcomponents/shadycss": "github:webcomponents/shadycss",
     "@webcomponents/shadydom": "github:webcomponents/shadydom",
     "@webcomponents/template": "github:webcomponents/template",
+    "@webcomponents/webcomponents-platform": "github:webcomponents/webcomponents-platform",
+    "@webcomponents/webcomponentsjs": "github:webcomponents/webcomponentsjs",
     "es6-promise": "github:stefanpenner/es6-promise",
     "webcomponents-platform": "github:webcomponents/webcomponents-platform",
     "webcomponents.js": "github:webcomponents/webcomponentsjs"
