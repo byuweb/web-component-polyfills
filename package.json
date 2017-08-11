@@ -7,24 +7,17 @@
   "author": "BYU Web Community",
   "license": "Apache-2.0",
   "scripts": {
-    "build": "rollup -c rollup.config.js && rollup -c rollup.minified.js"
+    "clean-dist": "del dist && make-dir dist",
+    "copy-all": "cpy node_modules/@webcomponents/webcomponentsjs/webcomponents-* dist/",
+    "copy-compat": "cpy dist/webcomponents-lite.js dist/ --rename web-component-polyfills.min.js && cpy dist/webcomponents-lite.js dist/ --rename web-component-polyfills.js",
+    "build": "npm run clean-dist && npm run copy-all && npm run copy-compat"
   },
   "dependencies": {
-    "@webcomponents/custom-elements": "github:webcomponents/custom-elements",
-    "@webcomponents/shadycss": "github:webcomponents/shadycss",
-    "@webcomponents/shadydom": "github:webcomponents/shadydom",
-    "@webcomponents/template": "github:webcomponents/template",
-    "@webcomponents/webcomponents-platform": "github:webcomponents/webcomponents-platform",
-    "@webcomponents/webcomponentsjs": "github:webcomponents/webcomponentsjs",
-    "es6-promise": "github:stefanpenner/es6-promise",
-    "webcomponents-platform": "github:webcomponents/webcomponents-platform",
-    "webcomponents.js": "github:webcomponents/webcomponentsjs"
+    "@webcomponents/webcomponentsjs": "^1.0.7"
   },
   "devDependencies": {
-    "babel-plugin-external-helpers": "^6.22.0",
-    "babel-preset-env": "^1.2.2",
-    "rollup": "^0.41.6",
-    "rollup-plugin-babel": "^2.7.1",
-    "rollup-plugin-uglify": "^1.0.1"
+    "cpy-cli": "^1.0.1",
+    "del-cli": "^1.1.0",
+    "make-dir-cli": "^1.0.0"
   }
 }
