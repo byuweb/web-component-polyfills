@@ -21,7 +21,7 @@ import '../node_modules/webcomponents-platform/webcomponents-platform.js'
 //------ template ------
 import '../node_modules/@webcomponents/template/template.js'
 //------ es6-promise ------
-import '../node_modules/es6-promise/dist/es6-promise.auto.min.js'
+import '../node_modules/es6-promise/lib/es6-promise.auto.js'
 //------ pre-polyfill ------
 import '../node_modules/webcomponents.js/src/pre-polyfill.js'
 //------ shadydom ------

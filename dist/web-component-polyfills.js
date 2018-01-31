@@ -130,28 +130,108 @@
 
 // minimal template polyfill
 (function () {
+  'use strict';
 
   var needsTemplate = typeof HTMLTemplateElement === 'undefined';
+  var brokenDocFragment = !(document.createDocumentFragment().cloneNode() instanceof DocumentFragment);
+  var needsDocFrag = false;
 
-  // NOTE: Patch document.importNode to work around IE11 bug that
-  // casues children of a document fragment imported while
-  // there is a mutation observer to not have a parentNode (!?!)
-  // It's important that this is the first patch to `importNode` so that
-  // dom produced for later patches is correct.
+  // NOTE: Replace DocumentFragment to work around IE11 bug that
+  // casues children of a document fragment modified while
+  // there is a mutation observer to not have a parentNode, or
+  // have a broken parentNode (!?!)
   if (/Trident/.test(navigator.userAgent)) {
     (function () {
-      var Native_importNode = Document.prototype.importNode;
-      Document.prototype.importNode = function () {
-        var n = Native_importNode.apply(this, arguments);
-        // Copy all children to a new document fragment since
-        // this one may be broken
-        if (n.nodeType === Node.DOCUMENT_FRAGMENT_NODE) {
-          var f = this.createDocumentFragment();
-          f.appendChild(n);
-          return f;
-        } else {
-          return n;
+
+      needsDocFrag = true;
+
+      var origCloneNode = Node.prototype.cloneNode;
+      Node.prototype.cloneNode = function cloneNode(deep) {
+        var newDom = origCloneNode.call(this, deep);
+        if (this instanceof DocumentFragment) {
+          newDom.__proto__ = DocumentFragment.prototype;
         }
+        return newDom;
+      };
+
+      // IE's DocumentFragment querySelector code doesn't work when
+      // called on an element instance
+      DocumentFragment.prototype.querySelectorAll = HTMLElement.prototype.querySelectorAll;
+      DocumentFragment.prototype.querySelector = HTMLElement.prototype.querySelector;
+
+      Object.defineProperties(DocumentFragment.prototype, {
+        'nodeType': {
+          get: function get() {
+            return Node.DOCUMENT_FRAGMENT_NODE;
+          },
+          configurable: true
+        },
+
+        'localName': {
+          get: function get() {
+            return undefined;
+          },
+          configurable: true
+        },
+
+        'nodeName': {
+          get: function get() {
+            return '#document-fragment';
+          },
+          configurable: true
+        }
+      });
+
+      var origInsertBefore = Node.prototype.insertBefore;
+      function insertBefore(newNode, refNode) {
+        if (newNode instanceof DocumentFragment) {
+          var child;
+          while (child = newNode.firstChild) {
+            origInsertBefore.call(this, child, refNode);
+          }
+        } else {
+          origInsertBefore.call(this, newNode, refNode);
+        }
+        return newNode;
+      }
+      Node.prototype.insertBefore = insertBefore;
+
+      var origAppendChild = Node.prototype.appendChild;
+      Node.prototype.appendChild = function appendChild(child) {
+        if (child instanceof DocumentFragment) {
+          insertBefore.call(this, child, null);
+        } else {
+          origAppendChild.call(this, child);
+        }
+        return child;
+      };
+
+      var origRemoveChild = Node.prototype.removeChild;
+      var origReplaceChild = Node.prototype.replaceChild;
+      Node.prototype.replaceChild = function replaceChild(newChild, oldChild) {
+        if (newChild instanceof DocumentFragment) {
+          insertBefore.call(this, newChild, oldChild);
+          origRemoveChild.call(this, oldChild);
+        } else {
+          origReplaceChild.call(this, newChild, oldChild);
+        }
+        return oldChild;
+      };
+
+      Document.prototype.createDocumentFragment = function createDocumentFragment() {
+        var frag = this.createElement('df');
+        frag.__proto__ = DocumentFragment.prototype;
+        return frag;
+      };
+
+      var origImportNode = Document.prototype.importNode;
+      Document.prototype.importNode = function importNode(impNode, deep) {
+        deep = deep || false;
+        var newNode = origImportNode.call(this, impNode, deep);
+        if (impNode instanceof DocumentFragment) {
+          newNode.__proto__ = DocumentFragment.prototype;
+        }
+        return newNode;
       };
     })();
   }
@@ -160,9 +240,33 @@
   // This means this polyfill must load before the CE polyfill and
   // this would need to be re-worked if a browser supports native CE
   // but not <template>.
-  var Native_cloneNode = Node.prototype.cloneNode;
-  var Native_createElement = Document.prototype.createElement;
-  var Native_importNode = Document.prototype.importNode;
+  var capturedCloneNode = Node.prototype.cloneNode;
+  var capturedCreateElement = Document.prototype.createElement;
+  var capturedImportNode = Document.prototype.importNode;
+  var capturedRemoveChild = Node.prototype.removeChild;
+  var capturedAppendChild = Node.prototype.appendChild;
+  var capturedReplaceChild = Node.prototype.replaceChild;
+
+  var elementQuerySelectorAll = Element.prototype.querySelectorAll;
+  var docQuerySelectorAll = Document.prototype.querySelectorAll;
+  var fragQuerySelectorAll = DocumentFragment.prototype.querySelectorAll;
+
+  var scriptSelector = 'script:not([type]),script[type="application/javascript"],script[type="text/javascript"]';
+
+  function QSA(node, selector) {
+    // IE 11 throws a SyntaxError with `scriptSelector` if the node has no children due to the `:not([type])` syntax
+    if (!node.childNodes.length) {
+      return [];
+    }
+    switch (node.nodeType) {
+      case Node.DOCUMENT_NODE:
+        return docQuerySelectorAll.call(node, selector);
+      case Node.DOCUMENT_FRAGMENT_NODE:
+        return fragQuerySelectorAll.call(node, selector);
+      default:
+        return elementQuerySelectorAll.call(node, selector);
+    }
+  }
 
   // returns true if nested templates cannot be cloned (they cannot be on
   // some impl's like Safari 8 and Edge)
@@ -174,7 +278,7 @@
       t2.content.appendChild(document.createElement('div'));
       t.content.appendChild(t2);
       var clone = t.cloneNode(true);
-      return clone.content.childNodes.length === 0 || clone.content.firstChild.content.childNodes.length === 0 || !(document.createDocumentFragment().cloneNode() instanceof DocumentFragment);
+      return clone.content.childNodes.length === 0 || clone.content.firstChild.content.childNodes.length === 0 || brokenDocFragment;
     }
   }();
 
@@ -182,45 +286,6 @@
   var PolyfilledHTMLTemplateElement = function PolyfilledHTMLTemplateElement() {};
 
   if (needsTemplate) {
-    var defineInnerHTML = function defineInnerHTML(obj) {
-      Object.defineProperty(obj, 'innerHTML', {
-        get: function get() {
-          var o = '';
-          for (var e = this.content.firstChild; e; e = e.nextSibling) {
-            o += e.outerHTML || escapeData(e.data);
-          }
-          return o;
-        },
-        set: function set(text) {
-          contentDoc.body.innerHTML = text;
-          PolyfilledHTMLTemplateElement.bootstrap(contentDoc);
-          while (this.content.firstChild) {
-            this.content.removeChild(this.content.firstChild);
-          }
-          while (contentDoc.body.firstChild) {
-            this.content.appendChild(contentDoc.body.firstChild);
-          }
-        },
-        configurable: true
-      });
-    };
-
-    var escapeReplace = function escapeReplace(c) {
-      switch (c) {
-        case '&':
-          return '&amp;';
-        case '<':
-          return '&lt;';
-        case '>':
-          return '&gt;';
-        case '\xA0':
-          return '&nbsp;';
-      }
-    };
-
-    var escapeData = function escapeData(s) {
-      return s.replace(escapeDataRegExp, escapeReplace);
-    };
 
     var contentDoc = document.implementation.createHTMLDocument('template');
     var canDecorate = true;
@@ -252,7 +317,7 @@
       template.content = contentDoc.createDocumentFragment();
       var child;
       while (child = template.firstChild) {
-        template.content.appendChild(child);
+        capturedAppendChild.call(template.content, child);
       }
       // NOTE: prefer prototype patching for performance and
       // because on some browsers (IE11), re-defining `innerHTML`
@@ -268,6 +333,7 @@
         if (canDecorate) {
           try {
             defineInnerHTML(template);
+            defineOuterHTML(template);
           } catch (err) {
             canDecorate = false;
           }
@@ -277,14 +343,59 @@
       PolyfilledHTMLTemplateElement.bootstrap(template.content);
     };
 
+    var defineInnerHTML = function defineInnerHTML(obj) {
+      Object.defineProperty(obj, 'innerHTML', {
+        get: function get() {
+          var o = '';
+          for (var e = this.content.firstChild; e; e = e.nextSibling) {
+            o += e.outerHTML || escapeData(e.data);
+          }
+          return o;
+        },
+        set: function set(text) {
+          contentDoc.body.innerHTML = text;
+          PolyfilledHTMLTemplateElement.bootstrap(contentDoc);
+          while (this.content.firstChild) {
+            capturedRemoveChild.call(this.content, this.content.firstChild);
+          }
+          while (contentDoc.body.firstChild) {
+            capturedAppendChild.call(this.content, contentDoc.body.firstChild);
+          }
+        },
+        configurable: true
+      });
+    };
+
+    var defineOuterHTML = function defineOuterHTML(obj) {
+      Object.defineProperty(obj, 'outerHTML', {
+        get: function get() {
+          return '<' + TEMPLATE_TAG + '>' + this.innerHTML + '</' + TEMPLATE_TAG + '>';
+        },
+        set: function set(innerHTML) {
+          if (this.parentNode) {
+            contentDoc.body.innerHTML = innerHTML;
+            var docFrag = this.ownerDocument.createDocumentFragment();
+            while (contentDoc.body.firstChild) {
+              capturedAppendChild.call(docFrag, contentDoc.body.firstChild);
+            }
+            capturedReplaceChild.call(this.parentNode, docFrag, this);
+          } else {
+            throw new Error("Failed to set the 'outerHTML' property on 'Element': This element has no parent node.");
+          }
+        },
+        configurable: true
+      });
+    };
+
     defineInnerHTML(PolyfilledHTMLTemplateElement.prototype);
+    defineOuterHTML(PolyfilledHTMLTemplateElement.prototype);
 
     /**
       The `bootstrap` method is called automatically and "fixes" all
       <template> elements in the document referenced by the `doc` argument.
     */
-    PolyfilledHTMLTemplateElement.bootstrap = function (doc) {
-      var templates = doc.querySelectorAll(TEMPLATE_TAG);
+    PolyfilledHTMLTemplateElement.bootstrap = function bootstrap(doc) {
+      var templates = QSA(doc, TEMPLATE_TAG);
       for (var i = 0, l = templates.length, t; i < l && (t = templates[i]); i++) {
         PolyfilledHTMLTemplateElement.decorate(t);
       }
@@ -296,10 +407,8 @@
     });
 
     // Patch document.createElement to ensure newly created templates have content
-    Document.prototype.createElement = function () {
-      'use strict';
-
-      var el = Native_createElement.apply(this, arguments);
+    Document.prototype.createElement = function createElement() {
+      var el = capturedCreateElement.apply(this, arguments);
       if (el.localName === 'template') {
         PolyfilledHTMLTemplateElement.decorate(el);
       }
@@ -307,13 +416,30 @@
     };
 
     var escapeDataRegExp = /[&\u00A0<>]/g;
+
+    var escapeReplace = function escapeReplace(c) {
+      switch (c) {
+        case '&':
+          return '&amp;';
+        case '<':
+          return '&lt;';
+        case '>':
+          return '&gt;';
+        case '\xA0':
+          return '&nbsp;';
+      }
+    };
+
+    var escapeData = function escapeData(s) {
+      return s.replace(escapeDataRegExp, escapeReplace);
+    };
   }
 
   // make cloning/importing work!
   if (needsTemplate || needsCloning) {
 
-    PolyfilledHTMLTemplateElement._cloneNode = function (template, deep) {
-      var clone = Native_cloneNode.call(template, false);
+    PolyfilledHTMLTemplateElement._cloneNode = function _cloneNode(template, deep) {
+      var clone = capturedCloneNode.call(template, false);
       // NOTE: decorate doesn't auto-fix children because they are already
       // decorated so they need special clone fixup.
       if (this.decorate) {
@@ -322,54 +448,71 @@
       if (deep) {
         // NOTE: use native clone node to make sure CE's wrapped
         // cloneNode does not cause elements to upgrade.
-        clone.content.appendChild(Native_cloneNode.call(template.content, true));
+        capturedAppendChild.call(clone.content, capturedCloneNode.call(template.content, true));
         // now ensure nested templates are cloned correctly.
-        this.fixClonedDom(clone.content, template.content);
+        fixClonedDom(clone.content, template.content);
       }
       return clone;
-    };
-
-    PolyfilledHTMLTemplateElement.prototype.cloneNode = function (deep) {
-      return PolyfilledHTMLTemplateElement._cloneNode(this, deep);
     };
 
     // Given a source and cloned subtree, find <template>'s in the cloned
     // subtree and replace them with cloned <template>'s from source.
     // We must do this because only the source templates have proper .content.
-    PolyfilledHTMLTemplateElement.fixClonedDom = function (clone, source) {
+    var fixClonedDom = function fixClonedDom(clone, source) {
       // do nothing if cloned node is not an element
       if (!source.querySelectorAll) return;
       // these two lists should be coincident
-      var s$ = source.querySelectorAll(TEMPLATE_TAG);
-      var t$ = clone.querySelectorAll(TEMPLATE_TAG);
+      var s$ = QSA(source, TEMPLATE_TAG);
+      if (s$.length === 0) {
+        return;
+      }
+      var t$ = QSA(clone, TEMPLATE_TAG);
       for (var i = 0, l = t$.length, t, s; i < l; i++) {
         s = s$[i];
         t = t$[i];
-        if (this.decorate) {
-          this.decorate(s);
+        if (PolyfilledHTMLTemplateElement && PolyfilledHTMLTemplateElement.decorate) {
+          PolyfilledHTMLTemplateElement.decorate(s);
         }
-        t.parentNode.replaceChild(s.cloneNode(true), t);
+        capturedReplaceChild.call(t.parentNode, cloneNode.call(s, true), t);
+      }
+    };
+
+    // make sure scripts inside of a cloned template are executable
+    var fixClonedScripts = function fixClonedScripts(fragment) {
+      var scripts = QSA(fragment, scriptSelector);
+      for (var ns, s, i = 0; i < scripts.length; i++) {
+        s = scripts[i];
+        ns = capturedCreateElement.call(document, 'script');
+        ns.textContent = s.textContent;
+        var attrs = s.attributes;
+        for (var ai = 0, a; ai < attrs.length; ai++) {
+          a = attrs[ai];
+          ns.setAttribute(a.name, a.value);
+        }
+        capturedReplaceChild.call(s.parentNode, ns, s);
       }
     };
 
     // override all cloning to fix the cloned subtree to contain properly
     // cloned templates.
-    Node.prototype.cloneNode = function (deep) {
+    var cloneNode = Node.prototype.cloneNode = function cloneNode(deep) {
       var dom;
       // workaround for Edge bug cloning documentFragments
       // https://developer.microsoft.com/en-us/microsoft-edge/platform/issues/8619646/
-      if (this instanceof DocumentFragment) {
+      if (!needsDocFrag && brokenDocFragment && this instanceof DocumentFragment) {
         if (!deep) {
           return this.ownerDocument.createDocumentFragment();
         } else {
-          dom = this.ownerDocument.importNode(this, true);
+          dom = importNode.call(this.ownerDocument, this, true);
         }
+      } else if (this.nodeType === Node.ELEMENT_NODE && this.localName === TEMPLATE_TAG) {
+        dom = PolyfilledHTMLTemplateElement._cloneNode(this, deep);
       } else {
-        dom = Native_cloneNode.call(this, deep);
+        dom = capturedCloneNode.call(this, deep);
       }
       // template.content is cloned iff `deep`.
       if (deep) {
-        PolyfilledHTMLTemplateElement.fixClonedDom(dom, this);
+        fixClonedDom(dom, this);
       }
       return dom;
     };
@@ -379,23 +522,19 @@
     // This is because the native import node creates the right document owned
     // subtree and `fixClonedDom` inserts cloned templates into this subtree,
     // thus updating the owner doc.
-    Document.prototype.importNode = function (element, deep) {
+    var importNode = Document.prototype.importNode = function importNode(element, deep) {
+      deep = deep || false;
       if (element.localName === TEMPLATE_TAG) {
         return PolyfilledHTMLTemplateElement._cloneNode(element, deep);
       } else {
-        var dom = Native_importNode.call(this, element, deep);
+        var dom = capturedImportNode.call(this, element, deep);
         if (deep) {
-          PolyfilledHTMLTemplateElement.fixClonedDom(dom, element);
+          fixClonedDom(dom, element);
+          fixClonedScripts(dom);
         }
         return dom;
       }
     };
-
-    if (needsCloning) {
-      window.HTMLTemplateElement.prototype.cloneNode = function (deep) {
-        return PolyfilledHTMLTemplateElement._cloneNode(this, deep);
-      };
-    }
   }
 
   if (needsTemplate) {
@@ -443,222 +582,1227 @@ var createClass = function () {
   };
 }();
 
-!function (t, e) {
-  "object" == (typeof exports === "undefined" ? "undefined" : _typeof(exports)) && "undefined" != typeof module ? module.exports = e() : "function" == typeof define && define.amd ? define(e) : t.ES6Promise = e();
-}(window, function () {
-  "use strict";
-  function t(t) {
-    var e = typeof t === "undefined" ? "undefined" : _typeof(t);return null !== t && ("object" === e || "function" === e);
-  }function e(t) {
-    return "function" == typeof t;
-  }function n(t) {
-    I = t;
-  }function r(t) {
-    J = t;
-  }function o() {
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+var toConsumableArray = function (arr) {
+  if (Array.isArray(arr)) {
+    for (var i = 0, arr2 = Array(arr.length); i < arr.length; i++) arr2[i] = arr[i];
+
+    return arr2;
+  } else {
+    return Array.from(arr);
+  }
+};
+
+function objectOrFunction(x) {
+  var type = typeof x === 'undefined' ? 'undefined' : _typeof(x);
+  return x !== null && (type === 'object' || type === 'function');
+}
+
+function isFunction(x) {
+  return typeof x === 'function';
+}
+
+
+
+var _isArray = void 0;
+if (Array.isArray) {
+  _isArray = Array.isArray;
+} else {
+  _isArray = function _isArray(x) {
+    return Object.prototype.toString.call(x) === '[object Array]';
+  };
+}
+
+var isArray = _isArray;
+
+var len = 0;
+var vertxNext = void 0;
+var customSchedulerFn = void 0;
+
+var asap = function asap(callback, arg) {
+  queue[len] = callback;
+  queue[len + 1] = arg;
+  len += 2;
+  if (len === 2) {
+    // If len is 2, that means that we need to schedule an async flush.
+    // If additional callbacks are queued before the queue is flushed, they
+    // will be processed by this flush that we are scheduling.
+    if (customSchedulerFn) {
+      customSchedulerFn(flush);
+    } else {
+      scheduleFlush();
+    }
+  }
+};
+
+function setScheduler(scheduleFn) {
+  customSchedulerFn = scheduleFn;
+}
+
+function setAsap(asapFn) {
+  asap = asapFn;
+}
+
+var browserWindow = typeof window !== 'undefined' ? window : undefined;
+var browserGlobal = browserWindow || {};
+var BrowserMutationObserver = browserGlobal.MutationObserver || browserGlobal.WebKitMutationObserver;
+var isNode = typeof self === 'undefined' && typeof process !== 'undefined' && {}.toString.call(process) === '[object process]';
+
+// test for web worker but not in IE10
+var isWorker = typeof Uint8ClampedArray !== 'undefined' && typeof importScripts !== 'undefined' && typeof MessageChannel !== 'undefined';
+
+// node
+function useNextTick() {
+  // node version 0.10.x displays a deprecation warning when nextTick is used recursively
+  // see https://github.com/cujojs/when/issues/410 for details
+  return function () {
+    return process.nextTick(flush);
+  };
+}
+
+// vertx
+function useVertxTimer() {
+  if (typeof vertxNext !== 'undefined') {
     return function () {
-      return process.nextTick(a);
+      vertxNext(flush);
     };
-  }function i() {
-    return "undefined" != typeof H ? function () {
-      H(a);
-    } : c();
-  }function s() {
-    var t = 0,
-        e = new V(a),
-        n = document.createTextNode("");return e.observe(n, { characterData: !0 }), function () {
-      n.data = t = ++t % 2;
-    };
-  }function u() {
-    var t = new MessageChannel();return t.port1.onmessage = a, function () {
-      return t.port2.postMessage(0);
-    };
-  }function c() {
-    var t = setTimeout;return function () {
-      return t(a, 1);
-    };
-  }function a() {
-    for (var t = 0; t < G; t += 2) {
-      var e = $[t],
-          n = $[t + 1];e(n), $[t] = void 0, $[t + 1] = void 0;
-    }G = 0;
-  }function f() {
-    try {
-      var t = require,
-          e = t("vertx");return H = e.runOnLoop || e.runOnContext, i();
-    } catch (n) {
-      return c();
-    }
-  }function l(t, e) {
-    var n = arguments,
-        r = this,
-        o = new this.constructor(p);void 0 === o[et] && k(o);var i = r._state;return i ? !function () {
-      var t = n[i - 1];J(function () {
-        return x(i, o, t, r._result);
-      });
-    }() : E(r, o, t, e), o;
-  }function h(t) {
-    var e = this;if (t && "object" == (typeof t === "undefined" ? "undefined" : _typeof(t)) && t.constructor === e) return t;var n = new e(p);return g(n, t), n;
-  }function p() {}function v() {
-    return new TypeError("You cannot resolve a promise with itself");
-  }function d() {
-    return new TypeError("A promises callback cannot return that same promise.");
-  }function _(t) {
-    try {
-      return t.then;
-    } catch (e) {
-      return it.error = e, it;
-    }
-  }function y(t, e, n, r) {
-    try {
-      t.call(e, n, r);
-    } catch (o) {
-      return o;
-    }
-  }function m(t, e, n) {
-    J(function (t) {
-      var r = !1,
-          o = y(n, e, function (n) {
-        r || (r = !0, e !== n ? g(t, n) : S(t, n));
-      }, function (e) {
-        r || (r = !0, j(t, e));
-      }, "Settle: " + (t._label || " unknown promise"));!r && o && (r = !0, j(t, o));
-    }, t);
-  }function b(t, e) {
-    e._state === rt ? S(t, e._result) : e._state === ot ? j(t, e._result) : E(e, void 0, function (e) {
-      return g(t, e);
-    }, function (e) {
-      return j(t, e);
+  }
+
+  return useSetTimeout();
+}
+
+function useMutationObserver() {
+  var iterations = 0;
+  var observer = new BrowserMutationObserver(flush);
+  var node = document.createTextNode('');
+  observer.observe(node, { characterData: true });
+
+  return function () {
+    node.data = iterations = ++iterations % 2;
+  };
+}
+
+// web worker
+function useMessageChannel() {
+  var channel = new MessageChannel();
+  channel.port1.onmessage = flush;
+  return function () {
+    return channel.port2.postMessage(0);
+  };
+}
+
+function useSetTimeout() {
+  // Store setTimeout reference so es6-promise will be unaffected by
+  // other code modifying setTimeout (like sinon.useFakeTimers())
+  var globalSetTimeout = setTimeout;
+  return function () {
+    return globalSetTimeout(flush, 1);
+  };
+}
+
+var queue = new Array(1000);
+function flush() {
+  for (var i = 0; i < len; i += 2) {
+    var callback = queue[i];
+    var arg = queue[i + 1];
+
+    callback(arg);
+
+    queue[i] = undefined;
+    queue[i + 1] = undefined;
+  }
+
+  len = 0;
+}
+
+function attemptVertx() {
+  try {
+    var vertx = Function('return this')().require('vertx');
+    vertxNext = vertx.runOnLoop || vertx.runOnContext;
+    return useVertxTimer();
+  } catch (e) {
+    return useSetTimeout();
+  }
+}
+
+var scheduleFlush = void 0;
+// Decide what async method to use to triggering processing of queued callbacks:
+if (isNode) {
+  scheduleFlush = useNextTick();
+} else if (BrowserMutationObserver) {
+  scheduleFlush = useMutationObserver();
+} else if (isWorker) {
+  scheduleFlush = useMessageChannel();
+} else if (browserWindow === undefined && typeof require === 'function') {
+  scheduleFlush = attemptVertx();
+} else {
+  scheduleFlush = useSetTimeout();
+}
+
+function then(onFulfillment, onRejection) {
+  var parent = this;
+
+  var child = new this.constructor(noop);
+
+  if (child[PROMISE_ID] === undefined) {
+    makePromise(child);
+  }
+
+  var _state = parent._state;
+
+
+  if (_state) {
+    var callback = arguments[_state - 1];
+    asap(function () {
+      return invokeCallback(_state, child, callback, parent._result);
     });
-  }function w(t, n, r) {
-    n.constructor === t.constructor && r === l && n.constructor.resolve === h ? b(t, n) : r === it ? (j(t, it.error), it.error = null) : void 0 === r ? S(t, n) : e(r) ? m(t, n, r) : S(t, n);
-  }function g(e, n) {
-    e === n ? j(e, v()) : t(n) ? w(e, n, _(n)) : S(e, n);
-  }function A(t) {
-    t._onerror && t._onerror(t._result), T(t);
-  }function S(t, e) {
-    t._state === nt && (t._result = e, t._state = rt, 0 !== t._subscribers.length && J(T, t));
-  }function j(t, e) {
-    t._state === nt && (t._state = ot, t._result = e, J(A, t));
-  }function E(t, e, n, r) {
-    var o = t._subscribers,
-        i = o.length;t._onerror = null, o[i] = e, o[i + rt] = n, o[i + ot] = r, 0 === i && t._state && J(T, t);
-  }function T(t) {
-    var e = t._subscribers,
-        n = t._state;if (0 !== e.length) {
-      for (var r = void 0, o = void 0, i = t._result, s = 0; s < e.length; s += 3) {
-        r = e[s], o = e[s + n], r ? x(n, r, o, i) : o(i);
-      }t._subscribers.length = 0;
-    }
-  }function M() {
-    this.error = null;
-  }function P(t, e) {
-    try {
-      return t(e);
-    } catch (n) {
-      return st.error = n, st;
-    }
-  }function x(t, n, r, o) {
-    var i = e(r),
-        s = void 0,
-        u = void 0,
-        c = void 0,
-        a = void 0;if (i) {
-      if (s = P(r, o), s === st ? (a = !0, u = s.error, s.error = null) : c = !0, n === s) return void j(n, d());
-    } else s = o, c = !0;n._state !== nt || (i && c ? g(n, s) : a ? j(n, u) : t === rt ? S(n, s) : t === ot && j(n, s));
-  }function C(t, e) {
-    try {
-      e(function (e) {
-        g(t, e);
-      }, function (e) {
-        j(t, e);
-      });
-    } catch (n) {
-      j(t, n);
-    }
-  }function O() {
-    return ut++;
-  }function k(t) {
-    t[et] = ut++, t._state = void 0, t._result = void 0, t._subscribers = [];
-  }function Y(t, e) {
-    this._instanceConstructor = t, this.promise = new t(p), this.promise[et] || k(this.promise), B(e) ? (this.length = e.length, this._remaining = e.length, this._result = new Array(this.length), 0 === this.length ? S(this.promise, this._result) : (this.length = this.length || 0, this._enumerate(e), 0 === this._remaining && S(this.promise, this._result))) : j(this.promise, q());
-  }function q() {
-    return new Error("Array Methods must be provided an Array");
-  }function F(t) {
-    return new Y(this, t).promise;
-  }function D(t) {
-    var e = this;return new e(B(t) ? function (n, r) {
-      for (var o = t.length, i = 0; i < o; i++) {
-        e.resolve(t[i]).then(n, r);
+  } else {
+    subscribe(parent, child, onFulfillment, onRejection);
+  }
+
+  return child;
+}
+
+/**
+  `Promise.resolve` returns a promise that will become resolved with the
+  passed `value`. It is shorthand for the following:
+
+  ```javascript
+  let promise = new Promise(function(resolve, reject){
+    resolve(1);
+  });
+
+  promise.then(function(value){
+    // value === 1
+  });
+  ```
+
+  Instead of writing the above, your code now simply becomes the following:
+
+  ```javascript
+  let promise = Promise.resolve(1);
+
+  promise.then(function(value){
+    // value === 1
+  });
+  ```
+
+  @method resolve
+  @static
+  @param {Any} value value that the returned promise will be resolved with
+  Useful for tooling.
+  @return {Promise} a promise that will become fulfilled with the given
+  `value`
+*/
+function resolve$1(object) {
+  /*jshint validthis:true */
+  var Constructor = this;
+
+  if (object && (typeof object === 'undefined' ? 'undefined' : _typeof(object)) === 'object' && object.constructor === Constructor) {
+    return object;
+  }
+
+  var promise = new Constructor(noop);
+  resolve(promise, object);
+  return promise;
+}
+
+var PROMISE_ID = Math.random().toString(36).substring(2);
+
+function noop() {}
+
+var PENDING = void 0;
+var FULFILLED = 1;
+var REJECTED = 2;
+
+var TRY_CATCH_ERROR = { error: null };
+
+function selfFulfillment() {
+  return new TypeError("You cannot resolve a promise with itself");
+}
+
+function cannotReturnOwn() {
+  return new TypeError('A promises callback cannot return that same promise.');
+}
+
+function getThen(promise) {
+  try {
+    return promise.then;
+  } catch (error) {
+    TRY_CATCH_ERROR.error = error;
+    return TRY_CATCH_ERROR;
+  }
+}
+
+function tryThen(then$$1, value, fulfillmentHandler, rejectionHandler) {
+  try {
+    then$$1.call(value, fulfillmentHandler, rejectionHandler);
+  } catch (e) {
+    return e;
+  }
+}
+
+function handleForeignThenable(promise, thenable, then$$1) {
+  asap(function (promise) {
+    var sealed = false;
+    var error = tryThen(then$$1, thenable, function (value) {
+      if (sealed) {
+        return;
       }
-    } : function (t, e) {
-      return e(new TypeError("You must pass an array to race."));
-    });
-  }function K(t) {
-    var e = this,
-        n = new e(p);return j(n, t), n;
-  }function L() {
-    throw new TypeError("You must pass a resolver function as the first argument to the promise constructor");
-  }function N() {
-    throw new TypeError("Failed to construct 'Promise': Please use the 'new' operator, this object constructor cannot be called as a function.");
-  }function U(t) {
-    this[et] = O(), this._result = this._state = void 0, this._subscribers = [], p !== t && ("function" != typeof t && L(), this instanceof U ? C(this, t) : N());
-  }function W() {
-    var t = void 0;if ("undefined" != typeof global) t = global;else if ("undefined" != typeof self) t = self;else try {
-      t = Function("return this")();
-    } catch (e) {
-      throw new Error("polyfill failed because global object is unavailable in this environment");
-    }var n = t.Promise;if (n) {
-      var r = null;try {
-        r = Object.prototype.toString.call(n.resolve());
-      } catch (e) {}if ("[object Promise]" === r && !n.cast) return;
-    }t.Promise = U;
-  }var z = void 0;z = Array.isArray ? Array.isArray : function (t) {
-    return "[object Array]" === Object.prototype.toString.call(t);
-  };var B = z,
-      G = 0,
-      H = void 0,
-      I = void 0,
-      J = function J(t, e) {
-    $[G] = t, $[G + 1] = e, G += 2, 2 === G && (I ? I(a) : tt());
-  },
-      Q = "undefined" != typeof window ? window : void 0,
-      R = Q || {},
-      V = R.MutationObserver || R.WebKitMutationObserver,
-      X = "undefined" == typeof self && "undefined" != typeof process && "[object process]" === {}.toString.call(process),
-      Z = "undefined" != typeof Uint8ClampedArray && "undefined" != typeof importScripts && "undefined" != typeof MessageChannel,
-      $ = new Array(1e3),
-      tt = void 0;tt = X ? o() : V ? s() : Z ? u() : void 0 === Q && "function" == typeof require ? f() : c();var et = Math.random().toString(36).substring(16),
-      nt = void 0,
-      rt = 1,
-      ot = 2,
-      it = new M(),
-      st = new M(),
-      ut = 0;return Y.prototype._enumerate = function (t) {
-    for (var e = 0; this._state === nt && e < t.length; e++) {
-      this._eachEntry(t[e], e);
+      sealed = true;
+      if (thenable !== value) {
+        resolve(promise, value);
+      } else {
+        fulfill(promise, value);
+      }
+    }, function (reason) {
+      if (sealed) {
+        return;
+      }
+      sealed = true;
+
+      reject(promise, reason);
+    }, 'Settle: ' + (promise._label || ' unknown promise'));
+
+    if (!sealed && error) {
+      sealed = true;
+      reject(promise, error);
     }
-  }, Y.prototype._eachEntry = function (t, e) {
-    var n = this._instanceConstructor,
-        r = n.resolve;if (r === h) {
-      var o = _(t);if (o === l && t._state !== nt) this._settledAt(t._state, e, t._result);else if ("function" != typeof o) this._remaining--, this._result[e] = t;else if (n === U) {
-        var i = new n(p);w(i, t, o), this._willSettleAt(i, e);
-      } else this._willSettleAt(new n(function (e) {
-        return e(t);
-      }), e);
-    } else this._willSettleAt(r(t), e);
-  }, Y.prototype._settledAt = function (t, e, n) {
-    var r = this.promise;r._state === nt && (this._remaining--, t === ot ? j(r, n) : this._result[e] = n), 0 === this._remaining && S(r, this._result);
-  }, Y.prototype._willSettleAt = function (t, e) {
-    var n = this;E(t, void 0, function (t) {
-      return n._settledAt(rt, e, t);
-    }, function (t) {
-      return n._settledAt(ot, e, t);
+  }, promise);
+}
+
+function handleOwnThenable(promise, thenable) {
+  if (thenable._state === FULFILLED) {
+    fulfill(promise, thenable._result);
+  } else if (thenable._state === REJECTED) {
+    reject(promise, thenable._result);
+  } else {
+    subscribe(thenable, undefined, function (value) {
+      return resolve(promise, value);
+    }, function (reason) {
+      return reject(promise, reason);
     });
-  }, U.all = F, U.race = D, U.resolve = h, U.reject = K, U._setScheduler = n, U._setAsap = r, U._asap = J, U.prototype = { constructor: U, then: l, "catch": function _catch(t) {
-      return this.then(null, t);
-    } }, U.polyfill = W, U.Promise = U, U.polyfill(), U;
-});
+  }
+}
+
+function handleMaybeThenable(promise, maybeThenable, then$$1) {
+  if (maybeThenable.constructor === promise.constructor && then$$1 === then && maybeThenable.constructor.resolve === resolve$1) {
+    handleOwnThenable(promise, maybeThenable);
+  } else {
+    if (then$$1 === TRY_CATCH_ERROR) {
+      reject(promise, TRY_CATCH_ERROR.error);
+      TRY_CATCH_ERROR.error = null;
+    } else if (then$$1 === undefined) {
+      fulfill(promise, maybeThenable);
+    } else if (isFunction(then$$1)) {
+      handleForeignThenable(promise, maybeThenable, then$$1);
+    } else {
+      fulfill(promise, maybeThenable);
+    }
+  }
+}
+
+function resolve(promise, value) {
+  if (promise === value) {
+    reject(promise, selfFulfillment());
+  } else if (objectOrFunction(value)) {
+    handleMaybeThenable(promise, value, getThen(value));
+  } else {
+    fulfill(promise, value);
+  }
+}
+
+function publishRejection(promise) {
+  if (promise._onerror) {
+    promise._onerror(promise._result);
+  }
+
+  publish(promise);
+}
+
+function fulfill(promise, value) {
+  if (promise._state !== PENDING) {
+    return;
+  }
+
+  promise._result = value;
+  promise._state = FULFILLED;
+
+  if (promise._subscribers.length !== 0) {
+    asap(publish, promise);
+  }
+}
+
+function reject(promise, reason) {
+  if (promise._state !== PENDING) {
+    return;
+  }
+  promise._state = REJECTED;
+  promise._result = reason;
+
+  asap(publishRejection, promise);
+}
+
+function subscribe(parent, child, onFulfillment, onRejection) {
+  var _subscribers = parent._subscribers;
+  var length = _subscribers.length;
+
+
+  parent._onerror = null;
+
+  _subscribers[length] = child;
+  _subscribers[length + FULFILLED] = onFulfillment;
+  _subscribers[length + REJECTED] = onRejection;
+
+  if (length === 0 && parent._state) {
+    asap(publish, parent);
+  }
+}
+
+function publish(promise) {
+  var subscribers = promise._subscribers;
+  var settled = promise._state;
+
+  if (subscribers.length === 0) {
+    return;
+  }
+
+  var child = void 0,
+      callback = void 0,
+      detail = promise._result;
+
+  for (var i = 0; i < subscribers.length; i += 3) {
+    child = subscribers[i];
+    callback = subscribers[i + settled];
+
+    if (child) {
+      invokeCallback(settled, child, callback, detail);
+    } else {
+      callback(detail);
+    }
+  }
+
+  promise._subscribers.length = 0;
+}
+
+function tryCatch(callback, detail) {
+  try {
+    return callback(detail);
+  } catch (e) {
+    TRY_CATCH_ERROR.error = e;
+    return TRY_CATCH_ERROR;
+  }
+}
+
+function invokeCallback(settled, promise, callback, detail) {
+  var hasCallback = isFunction(callback),
+      value = void 0,
+      error = void 0,
+      succeeded = void 0,
+      failed = void 0;
+
+  if (hasCallback) {
+    value = tryCatch(callback, detail);
+
+    if (value === TRY_CATCH_ERROR) {
+      failed = true;
+      error = value.error;
+      value.error = null;
+    } else {
+      succeeded = true;
+    }
+
+    if (promise === value) {
+      reject(promise, cannotReturnOwn());
+      return;
+    }
+  } else {
+    value = detail;
+    succeeded = true;
+  }
+
+  if (promise._state !== PENDING) {
+    // noop
+  } else if (hasCallback && succeeded) {
+    resolve(promise, value);
+  } else if (failed) {
+    reject(promise, error);
+  } else if (settled === FULFILLED) {
+    fulfill(promise, value);
+  } else if (settled === REJECTED) {
+    reject(promise, value);
+  }
+}
+
+function initializePromise(promise, resolver) {
+  try {
+    resolver(function resolvePromise(value) {
+      resolve(promise, value);
+    }, function rejectPromise(reason) {
+      reject(promise, reason);
+    });
+  } catch (e) {
+    reject(promise, e);
+  }
+}
+
+var id = 0;
+function nextId() {
+  return id++;
+}
+
+function makePromise(promise) {
+  promise[PROMISE_ID] = id++;
+  promise._state = undefined;
+  promise._result = undefined;
+  promise._subscribers = [];
+}
+
+function validationError() {
+  return new Error('Array Methods must be provided an Array');
+}
+
+var Enumerator = function () {
+  function Enumerator(Constructor, input) {
+    classCallCheck(this, Enumerator);
+
+    this._instanceConstructor = Constructor;
+    this.promise = new Constructor(noop);
+
+    if (!this.promise[PROMISE_ID]) {
+      makePromise(this.promise);
+    }
+
+    if (isArray(input)) {
+      this.length = input.length;
+      this._remaining = input.length;
+
+      this._result = new Array(this.length);
+
+      if (this.length === 0) {
+        fulfill(this.promise, this._result);
+      } else {
+        this.length = this.length || 0;
+        this._enumerate(input);
+        if (this._remaining === 0) {
+          fulfill(this.promise, this._result);
+        }
+      }
+    } else {
+      reject(this.promise, validationError());
+    }
+  }
+
+  createClass(Enumerator, [{
+    key: '_enumerate',
+    value: function _enumerate(input) {
+      for (var i = 0; this._state === PENDING && i < input.length; i++) {
+        this._eachEntry(input[i], i);
+      }
+    }
+  }, {
+    key: '_eachEntry',
+    value: function _eachEntry(entry, i) {
+      var c = this._instanceConstructor;
+      var resolve$$1 = c.resolve;
+
+
+      if (resolve$$1 === resolve$1) {
+        var _then = getThen(entry);
+
+        if (_then === then && entry._state !== PENDING) {
+          this._settledAt(entry._state, i, entry._result);
+        } else if (typeof _then !== 'function') {
+          this._remaining--;
+          this._result[i] = entry;
+        } else if (c === Promise$3) {
+          var promise = new c(noop);
+          handleMaybeThenable(promise, entry, _then);
+          this._willSettleAt(promise, i);
+        } else {
+          this._willSettleAt(new c(function (resolve$$1) {
+            return resolve$$1(entry);
+          }), i);
+        }
+      } else {
+        this._willSettleAt(resolve$$1(entry), i);
+      }
+    }
+  }, {
+    key: '_settledAt',
+    value: function _settledAt(state, i, value) {
+      var promise = this.promise;
+
+
+      if (promise._state === PENDING) {
+        this._remaining--;
+
+        if (state === REJECTED) {
+          reject(promise, value);
+        } else {
+          this._result[i] = value;
+        }
+      }
+
+      if (this._remaining === 0) {
+        fulfill(promise, this._result);
+      }
+    }
+  }, {
+    key: '_willSettleAt',
+    value: function _willSettleAt(promise, i) {
+      var enumerator = this;
+
+      subscribe(promise, undefined, function (value) {
+        return enumerator._settledAt(FULFILLED, i, value);
+      }, function (reason) {
+        return enumerator._settledAt(REJECTED, i, reason);
+      });
+    }
+  }]);
+  return Enumerator;
+}();
+
+/**
+  `Promise.all` accepts an array of promises, and returns a new promise which
+  is fulfilled with an array of fulfillment values for the passed promises, or
+  rejected with the reason of the first passed promise to be rejected. It casts all
+  elements of the passed iterable to promises as it runs this algorithm.
+
+  Example:
+
+  ```javascript
+  let promise1 = resolve(1);
+  let promise2 = resolve(2);
+  let promise3 = resolve(3);
+  let promises = [ promise1, promise2, promise3 ];
+
+  Promise.all(promises).then(function(array){
+    // The array here would be [ 1, 2, 3 ];
+  });
+  ```
+
+  If any of the `promises` given to `all` are rejected, the first promise
+  that is rejected will be given as an argument to the returned promises's
+  rejection handler. For example:
+
+  Example:
+
+  ```javascript
+  let promise1 = resolve(1);
+  let promise2 = reject(new Error("2"));
+  let promise3 = reject(new Error("3"));
+  let promises = [ promise1, promise2, promise3 ];
+
+  Promise.all(promises).then(function(array){
+    // Code here never runs because there are rejected promises!
+  }, function(error) {
+    // error.message === "2"
+  });
+  ```
+
+  @method all
+  @static
+  @param {Array} entries array of promises
+  @param {String} label optional string for labeling the promise.
+  Useful for tooling.
+  @return {Promise} promise that is fulfilled when all `promises` have been
+  fulfilled, or rejected if any of them become rejected.
+  @static
+*/
+function all(entries) {
+  return new Enumerator(this, entries).promise;
+}
+
+/**
+  `Promise.race` returns a new promise which is settled in the same way as the
+  first passed promise to settle.
+
+  Example:
+
+  ```javascript
+  let promise1 = new Promise(function(resolve, reject){
+    setTimeout(function(){
+      resolve('promise 1');
+    }, 200);
+  });
+
+  let promise2 = new Promise(function(resolve, reject){
+    setTimeout(function(){
+      resolve('promise 2');
+    }, 100);
+  });
+
+  Promise.race([promise1, promise2]).then(function(result){
+    // result === 'promise 2' because it was resolved before promise1
+    // was resolved.
+  });
+  ```
+
+  `Promise.race` is deterministic in that only the state of the first
+  settled promise matters. For example, even if other promises given to the
+  `promises` array argument are resolved, but the first settled promise has
+  become rejected before the other promises became fulfilled, the returned
+  promise will become rejected:
+
+  ```javascript
+  let promise1 = new Promise(function(resolve, reject){
+    setTimeout(function(){
+      resolve('promise 1');
+    }, 200);
+  });
+
+  let promise2 = new Promise(function(resolve, reject){
+    setTimeout(function(){
+      reject(new Error('promise 2'));
+    }, 100);
+  });
+
+  Promise.race([promise1, promise2]).then(function(result){
+    // Code here never runs
+  }, function(reason){
+    // reason.message === 'promise 2' because promise 2 became rejected before
+    // promise 1 became fulfilled
+  });
+  ```
+
+  An example real-world use case is implementing timeouts:
+
+  ```javascript
+  Promise.race([ajax('foo.json'), timeout(5000)])
+  ```
+
+  @method race
+  @static
+  @param {Array} promises array of promises to observe
+  Useful for tooling.
+  @return {Promise} a promise which settles in the same way as the first passed
+  promise to settle.
+*/
+function race(entries) {
+  /*jshint validthis:true */
+  var Constructor = this;
+
+  if (!isArray(entries)) {
+    return new Constructor(function (_, reject) {
+      return reject(new TypeError('You must pass an array to race.'));
+    });
+  } else {
+    return new Constructor(function (resolve, reject) {
+      var length = entries.length;
+      for (var i = 0; i < length; i++) {
+        Constructor.resolve(entries[i]).then(resolve, reject);
+      }
+    });
+  }
+}
+
+/**
+  `Promise.reject` returns a promise rejected with the passed `reason`.
+  It is shorthand for the following:
+
+  ```javascript
+  let promise = new Promise(function(resolve, reject){
+    reject(new Error('WHOOPS'));
+  });
+
+  promise.then(function(value){
+    // Code here doesn't run because the promise is rejected!
+  }, function(reason){
+    // reason.message === 'WHOOPS'
+  });
+  ```
+
+  Instead of writing the above, your code now simply becomes the following:
+
+  ```javascript
+  let promise = Promise.reject(new Error('WHOOPS'));
+
+  promise.then(function(value){
+    // Code here doesn't run because the promise is rejected!
+  }, function(reason){
+    // reason.message === 'WHOOPS'
+  });
+  ```
+
+  @method reject
+  @static
+  @param {Any} reason value that the returned promise will be rejected with.
+  Useful for tooling.
+  @return {Promise} a promise rejected with the given `reason`.
+*/
+function reject$1(reason) {
+  /*jshint validthis:true */
+  var Constructor = this;
+  var promise = new Constructor(noop);
+  reject(promise, reason);
+  return promise;
+}
+
+function needsResolver() {
+  throw new TypeError('You must pass a resolver function as the first argument to the promise constructor');
+}
+
+function needsNew() {
+  throw new TypeError("Failed to construct 'Promise': Please use the 'new' operator, this object constructor cannot be called as a function.");
+}
+
+/**
+  Promise objects represent the eventual result of an asynchronous operation. The
+  primary way of interacting with a promise is through its `then` method, which
+  registers callbacks to receive either a promise's eventual value or the reason
+  why the promise cannot be fulfilled.
+
+  Terminology
+  -----------
+
+  - `promise` is an object or function with a `then` method whose behavior conforms to this specification.
+  - `thenable` is an object or function that defines a `then` method.
+  - `value` is any legal JavaScript value (including undefined, a thenable, or a promise).
+  - `exception` is a value that is thrown using the throw statement.
+  - `reason` is a value that indicates why a promise was rejected.
+  - `settled` the final resting state of a promise, fulfilled or rejected.
+
+  A promise can be in one of three states: pending, fulfilled, or rejected.
+
+  Promises that are fulfilled have a fulfillment value and are in the fulfilled
+  state.  Promises that are rejected have a rejection reason and are in the
+  rejected state.  A fulfillment value is never a thenable.
+
+  Promises can also be said to *resolve* a value.  If this value is also a
+  promise, then the original promise's settled state will match the value's
+  settled state.  So a promise that *resolves* a promise that rejects will
+  itself reject, and a promise that *resolves* a promise that fulfills will
+  itself fulfill.
+
+
+  Basic Usage:
+  ------------
+
+  ```js
+  let promise = new Promise(function(resolve, reject) {
+    // on success
+    resolve(value);
+
+    // on failure
+    reject(reason);
+  });
+
+  promise.then(function(value) {
+    // on fulfillment
+  }, function(reason) {
+    // on rejection
+  });
+  ```
+
+  Advanced Usage:
+  ---------------
+
+  Promises shine when abstracting away asynchronous interactions such as
+  `XMLHttpRequest`s.
+
+  ```js
+  function getJSON(url) {
+    return new Promise(function(resolve, reject){
+      let xhr = new XMLHttpRequest();
+
+      xhr.open('GET', url);
+      xhr.onreadystatechange = handler;
+      xhr.responseType = 'json';
+      xhr.setRequestHeader('Accept', 'application/json');
+      xhr.send();
+
+      function handler() {
+        if (this.readyState === this.DONE) {
+          if (this.status === 200) {
+            resolve(this.response);
+          } else {
+            reject(new Error('getJSON: `' + url + '` failed with status: [' + this.status + ']'));
+          }
+        }
+      };
+    });
+  }
+
+  getJSON('/posts.json').then(function(json) {
+    // on fulfillment
+  }, function(reason) {
+    // on rejection
+  });
+  ```
+
+  Unlike callbacks, promises are great composable primitives.
+
+  ```js
+  Promise.all([
+    getJSON('/posts'),
+    getJSON('/comments')
+  ]).then(function(values){
+    values[0] // => postsJSON
+    values[1] // => commentsJSON
+
+    return values;
+  });
+  ```
+
+  @class Promise
+  @param {Function} resolver
+  Useful for tooling.
+  @constructor
+*/
+
+var Promise$3 = function () {
+  function Promise(resolver) {
+    classCallCheck(this, Promise);
+
+    this[PROMISE_ID] = nextId();
+    this._result = this._state = undefined;
+    this._subscribers = [];
+
+    if (noop !== resolver) {
+      typeof resolver !== 'function' && needsResolver();
+      this instanceof Promise ? initializePromise(this, resolver) : needsNew();
+    }
+  }
+
+  /**
+  The primary way of interacting with a promise is through its `then` method,
+  which registers callbacks to receive either a promise's eventual value or the
+  reason why the promise cannot be fulfilled.
+   ```js
+  findUser().then(function(user){
+    // user is available
+  }, function(reason){
+    // user is unavailable, and you are given the reason why
+  });
+  ```
+   Chaining
+  --------
+   The return value of `then` is itself a promise.  This second, 'downstream'
+  promise is resolved with the return value of the first promise's fulfillment
+  or rejection handler, or rejected if the handler throws an exception.
+   ```js
+  findUser().then(function (user) {
+    return user.name;
+  }, function (reason) {
+    return 'default name';
+  }).then(function (userName) {
+    // If `findUser` fulfilled, `userName` will be the user's name, otherwise it
+    // will be `'default name'`
+  });
+   findUser().then(function (user) {
+    throw new Error('Found user, but still unhappy');
+  }, function (reason) {
+    throw new Error('`findUser` rejected and we're unhappy');
+  }).then(function (value) {
+    // never reached
+  }, function (reason) {
+    // if `findUser` fulfilled, `reason` will be 'Found user, but still unhappy'.
+    // If `findUser` rejected, `reason` will be '`findUser` rejected and we're unhappy'.
+  });
+  ```
+  If the downstream promise does not specify a rejection handler, rejection reasons will be propagated further downstream.
+   ```js
+  findUser().then(function (user) {
+    throw new PedagogicalException('Upstream error');
+  }).then(function (value) {
+    // never reached
+  }).then(function (value) {
+    // never reached
+  }, function (reason) {
+    // The `PedgagocialException` is propagated all the way down to here
+  });
+  ```
+   Assimilation
+  ------------
+   Sometimes the value you want to propagate to a downstream promise can only be
+  retrieved asynchronously. This can be achieved by returning a promise in the
+  fulfillment or rejection handler. The downstream promise will then be pending
+  until the returned promise is settled. This is called *assimilation*.
+   ```js
+  findUser().then(function (user) {
+    return findCommentsByAuthor(user);
+  }).then(function (comments) {
+    // The user's comments are now available
+  });
+  ```
+   If the assimliated promise rejects, then the downstream promise will also reject.
+   ```js
+  findUser().then(function (user) {
+    return findCommentsByAuthor(user);
+  }).then(function (comments) {
+    // If `findCommentsByAuthor` fulfills, we'll have the value here
+  }, function (reason) {
+    // If `findCommentsByAuthor` rejects, we'll have the reason here
+  });
+  ```
+   Simple Example
+  --------------
+   Synchronous Example
+   ```javascript
+  let result;
+   try {
+    result = findResult();
+    // success
+  } catch(reason) {
+    // failure
+  }
+  ```
+   Errback Example
+   ```js
+  findResult(function(result, err){
+    if (err) {
+      // failure
+    } else {
+      // success
+    }
+  });
+  ```
+   Promise Example;
+   ```javascript
+  findResult().then(function(result){
+    // success
+  }, function(reason){
+    // failure
+  });
+  ```
+   Advanced Example
+  --------------
+   Synchronous Example
+   ```javascript
+  let author, books;
+   try {
+    author = findAuthor();
+    books  = findBooksByAuthor(author);
+    // success
+  } catch(reason) {
+    // failure
+  }
+  ```
+   Errback Example
+   ```js
+   function foundBooks(books) {
+   }
+   function failure(reason) {
+   }
+   findAuthor(function(author, err){
+    if (err) {
+      failure(err);
+      // failure
+    } else {
+      try {
+        findBoooksByAuthor(author, function(books, err) {
+          if (err) {
+            failure(err);
+          } else {
+            try {
+              foundBooks(books);
+            } catch(reason) {
+              failure(reason);
+            }
+          }
+        });
+      } catch(error) {
+        failure(err);
+      }
+      // success
+    }
+  });
+  ```
+   Promise Example;
+   ```javascript
+  findAuthor().
+    then(findBooksByAuthor).
+    then(function(books){
+      // found books
+  }).catch(function(reason){
+    // something went wrong
+  });
+  ```
+   @method then
+  @param {Function} onFulfilled
+  @param {Function} onRejected
+  Useful for tooling.
+  @return {Promise}
+  */
+
+  /**
+  `catch` is simply sugar for `then(undefined, onRejection)` which makes it the same
+  as the catch block of a try/catch statement.
+  ```js
+  function findAuthor(){
+  throw new Error('couldn't find that author');
+  }
+  // synchronous
+  try {
+  findAuthor();
+  } catch(reason) {
+  // something went wrong
+  }
+  // async with promises
+  findAuthor().catch(function(reason){
+  // something went wrong
+  });
+  ```
+  @method catch
+  @param {Function} onRejection
+  Useful for tooling.
+  @return {Promise}
+  */
+
+
+  createClass(Promise, [{
+    key: 'catch',
+    value: function _catch(onRejection) {
+      return this.then(null, onRejection);
+    }
+
+    /**
+      `finally` will be invoked regardless of the promise's fate just as native
+      try/catch/finally behaves
+    
+      Synchronous example:
+    
+      ```js
+      findAuthor() {
+        if (Math.random() > 0.5) {
+          throw new Error();
+        }
+        return new Author();
+      }
+    
+      try {
+        return findAuthor(); // succeed or fail
+      } catch(error) {
+        return findOtherAuther();
+      } finally {
+        // always runs
+        // doesn't affect the return value
+      }
+      ```
+    
+      Asynchronous example:
+    
+      ```js
+      findAuthor().catch(function(reason){
+        return findOtherAuther();
+      }).finally(function(){
+        // author was either found, or not
+      });
+      ```
+    
+      @method finally
+      @param {Function} callback
+      @return {Promise}
+    */
+
+  }, {
+    key: 'finally',
+    value: function _finally(callback) {
+      var promise = this;
+      var constructor = promise.constructor;
+
+      return promise.then(function (value) {
+        return constructor.resolve(callback()).then(function () {
+          return value;
+        });
+      }, function (reason) {
+        return constructor.resolve(callback()).then(function () {
+          throw reason;
+        });
+      });
+    }
+  }]);
+  return Promise;
+}();
+
+Promise$3.prototype.then = then;
+Promise$3.all = all;
+Promise$3.race = race;
+Promise$3.resolve = resolve$1;
+Promise$3.reject = reject$1;
+Promise$3._setScheduler = setScheduler;
+Promise$3._setAsap = setAsap;
+Promise$3._asap = asap;
+
+/*global self*/
+function polyfill() {
+  var local = void 0;
+
+  if (typeof global !== 'undefined') {
+    local = global;
+  } else if (typeof self !== 'undefined') {
+    local = self;
+  } else {
+    try {
+      local = Function('return this')();
+    } catch (e) {
+      throw new Error('polyfill failed because global object is unavailable in this environment');
+    }
+  }
+
+  var P = local.Promise;
+
+  if (P) {
+    var promiseToString = null;
+    try {
+      promiseToString = Object.prototype.toString.call(P.resolve());
+    } catch (e) {
+      // silently ignored
+    }
+
+    if (promiseToString === '[object Promise]' && !P.cast) {
+      return;
+    }
+  }
+
+  local.Promise = Promise$3;
+}
+
+// Strange compat..
+Promise$3.polyfill = polyfill;
+Promise$3.Promise = Promise$3;
+
+Promise$3.polyfill();
 
 /**
  * @license
@@ -670,63 +1814,58 @@ var createClass = function () {
  * subject to an additional IP rights grant found at http://polymer.github.io/PATENTS.txt
  */
 
-(function () {
+// Establish scope.
 
-  'use strict';
+window['WebComponents'] = window['WebComponents'] || { 'flags': {} };
 
-  // Establish scope.
+// loading script
+var file = 'webcomponents-lite.js';
+var script = document.querySelector('script[src*="' + file + '"]');
+var flagMatcher = /wc-(.+)/;
 
-  window['WebComponents'] = window['WebComponents'] || { 'flags': {} };
-
-  // loading script
-  var file = 'webcomponents-lite.js';
-  var script = document.querySelector('script[src*="' + file + '"]');
-  var flagMatcher = /wc-(.+)/;
-
-  // Flags. Convert url arguments to flags
-  var flags = {};
-  if (!flags['noOpts']) {
-    // from url
-    location.search.slice(1).split('&').forEach(function (option) {
-      var parts = option.split('=');
-      var match;
-      if (parts[0] && (match = parts[0].match(flagMatcher))) {
-        flags[match[1]] = parts[1] || true;
+// Flags. Convert url arguments to flags
+var flags = {};
+if (!flags['noOpts']) {
+  // from url
+  location.search.slice(1).split('&').forEach(function (option) {
+    var parts = option.split('=');
+    var match = void 0;
+    if (parts[0] && (match = parts[0].match(flagMatcher))) {
+      flags[match[1]] = parts[1] || true;
+    }
+  });
+  // from script
+  if (script) {
+    for (var i = 0, a; a = script.attributes[i]; i++) {
+      if (a.name !== 'src') {
+        flags[a.name] = a.value || true;
       }
+    }
+  }
+  // log flags
+  if (flags['log'] && flags['log']['split']) {
+    var parts = flags['log'].split(',');
+    flags['log'] = {};
+    parts.forEach(function (f) {
+      flags['log'][f] = true;
     });
-    // from script
-    if (script) {
-      for (var i = 0, a; a = script.attributes[i]; i++) {
-        if (a.name !== 'src') {
-          flags[a.name] = a.value || true;
-        }
-      }
-    }
-    // log flags
-    if (flags['log'] && flags['log']['split']) {
-      var parts = flags['log'].split(',');
-      flags['log'] = {};
-      parts.forEach(function (f) {
-        flags['log'][f] = true;
-      });
-    } else {
-      flags['log'] = {};
-    }
+  } else {
+    flags['log'] = {};
   }
+}
 
-  // exports
-  window['WebComponents']['flags'] = flags;
-  var forceShady = flags['shadydom'];
-  if (forceShady) {
-    window['ShadyDOM'] = window['ShadyDOM'] || {};
-    window['ShadyDOM']['force'] = forceShady;
-  }
+// exports
+window['WebComponents']['flags'] = flags;
+var forceShady = flags['shadydom'];
+if (forceShady) {
+  window['ShadyDOM'] = window['ShadyDOM'] || {};
+  window['ShadyDOM']['force'] = forceShady;
+}
 
-  var forceCE = flags['register'] || flags['ce'];
-  if (forceCE && window['customElements']) {
-    window['customElements']['forcePolyfill'] = forceCE;
-  }
-})();
+var forceCE = flags['register'] || flags['ce'];
+if (forceCE && window['customElements']) {
+  window['customElements']['forcePolyfill'] = forceCE;
+}
 
 /**
 @license
@@ -818,12 +1957,12 @@ function patchPrototype(obj, mixin) {
 
 var twiddle = document.createTextNode('');
 var content = 0;
-var queue = [];
+var queue$1 = [];
 new MutationObserver(function () {
-  while (queue.length) {
+  while (queue$1.length) {
     // catch errors in user code...
     try {
-      queue.shift()();
+      queue$1.shift()();
     } catch (e) {
       // enqueue another record and throw
       twiddle.textContent = content++;
@@ -834,8 +1973,20 @@ new MutationObserver(function () {
 
 // use MutationObserver to get microtask async timing.
 function microtask(callback) {
-  queue.push(callback);
+  queue$1.push(callback);
   twiddle.textContent = content++;
+}
+
+var hasDocumentContains = Boolean(document.contains);
+
+function contains(container, node) {
+  while (node) {
+    if (node == container) {
+      return true;
+    }
+    node = node.parentNode;
+  }
+  return false;
 }
 
 /**
@@ -854,12 +2005,12 @@ var scheduled = void 0;
 function enqueue(callback) {
   if (!scheduled) {
     scheduled = true;
-    microtask(flush);
+    microtask(flush$1);
   }
   flushList.push(callback);
 }
 
-function flush() {
+function flush$1() {
   scheduled = false;
   var didFlush = Boolean(flushList.length);
   while (flushList.length) {
@@ -868,7 +2019,7 @@ function flush() {
   return didFlush;
 }
 
-flush['list'] = flushList;
+flush$1['list'] = flushList;
 
 /**
 @license
@@ -1017,6 +2168,7 @@ var windowRemoveEventListener = Window.prototype.removeEventListener;
 var dispatchEvent = Element.prototype.dispatchEvent;
 var querySelector = Element.prototype.querySelector;
 var querySelectorAll = Element.prototype.querySelectorAll;
+var contains$1 = Node.prototype.contains || HTMLElement.prototype.contains;
 
 var nativeMethods = Object.freeze({
 	appendChild: appendChild,
@@ -1032,7 +2184,8 @@ var nativeMethods = Object.freeze({
 	windowRemoveEventListener: windowRemoveEventListener,
 	dispatchEvent: dispatchEvent,
 	querySelector: querySelector,
-	querySelectorAll: querySelectorAll
+	querySelectorAll: querySelectorAll,
+	contains: contains$1
 });
 
 /**
@@ -1293,7 +2446,6 @@ function clearNode(node) {
 var nativeInnerHTMLDesc = /** @type {ObjectPropertyDescriptor} */Object.getOwnPropertyDescriptor(Element.prototype, 'innerHTML') || Object.getOwnPropertyDescriptor(HTMLElement.prototype, 'innerHTML');
 
 var inertDoc = document.implementation.createHTMLDocument('inert');
-var htmlContainer = inertDoc.createElement('div');
 
 var nativeActiveElementDescriptor =
 /** @type {ObjectPropertyDescriptor} */Object.getOwnPropertyDescriptor(Document.prototype, 'activeElement');
@@ -1323,7 +2475,7 @@ function activeElementForNode(node) {
     // If this shady root's host is the active element or the active
     // element is not a descendant of the host (in the composed tree),
     // then it doesn't have an active element.
-    if (node.host === active || !node.host.contains(active)) {
+    if (node.host === active || !contains$1.call(node.host, active)) {
       return null;
     }
   }
@@ -1529,11 +2681,17 @@ var InsideAccessors = {
      * @param {string} text
      */
     set: function set(text) {
+      if (typeof text === 'undefined' || text === null) {
+        text = '';
+      }
       switch (this.nodeType) {
         case Node.ELEMENT_NODE:
         case Node.DOCUMENT_FRAGMENT_NODE:
           clearNode(this);
-          this.appendChild(document.createTextNode(text));
+          // Document fragments must have no childnodes if setting a blank string
+          if (text.length > 0 || this.nodeType === Node.ELEMENT_NODE) {
+            this.appendChild(document.createTextNode(text));
+          }
           break;
         default:
           // TODO(sorvell): can't do this if patch nodeValue.
@@ -1628,6 +2786,11 @@ var InsideAccessors = {
       var content = this.localName === 'template' ?
       /** @type {HTMLTemplateElement} */this.content : this;
       clearNode(content);
+      var containerName = this.localName;
+      if (!containerName || containerName === 'template') {
+        containerName = 'div';
+      }
+      var htmlContainer = inertDoc.createElement(containerName);
       if (nativeInnerHTMLDesc && nativeInnerHTMLDesc.set) {
         nativeInnerHTMLDesc.set.call(htmlContainer, text);
       } else {
@@ -1890,6 +3053,9 @@ function insertBefore$1(parent, node, ref_node) {
   var ownerRoot = ownerShadyRootForNode(parent);
   // if a slot is added, must render containing root.
   var slotsAdded = ownerRoot && findContainedSlots(node);
+  if (slotsAdded) {
+    ownerRoot._addSlots(slotsAdded);
+  }
   if (ownerRoot && (parent.localName === 'slot' || slotsAdded)) {
     ownerRoot._asyncRender();
   }
@@ -1919,10 +3085,6 @@ function insertBefore$1(parent, node, ref_node) {
     }
   }
   scheduleObserver(parent, node);
-  // with insertion complete, can safely update insertion points.
-  if (slotsAdded) {
-    ownerRoot._addSlots(slotsAdded);
-  }
   return node;
 }
 
@@ -2090,7 +3252,7 @@ function getRootNode(node, options) {
     // can be cached while an element is inside a fragment.
     // If this happens and we cache the result, the value can become stale
     // because for perf we avoid processing the subtree of added fragments.
-    if (document.documentElement.contains(node)) {
+    if (contains$1.call(document.documentElement, node)) {
       node.__shady.ownerShadyRoot = root;
     }
   }
@@ -2201,6 +3363,12 @@ The complete set of contributors may be found at http://polymer.github.io/CONTRI
 Code distributed by Google as part of the polymer project is also
 subject to an additional IP rights grant found at http://polymer.github.io/PATENTS.txt
 */
+
+/*
+Make this name unique so it is unlikely to conflict with properties on objects passed to `addEventListener`
+https://github.com/webcomponents/shadydom/issues/173
+*/
+var eventWrappersName = '__eventWrappers' + Date.now();
 
 // https://github.com/w3c/webcomponents/issues/513#issuecomment-224183937
 var alwaysComposed = {
@@ -2376,11 +3544,26 @@ var nonBubblingEventsToRetarget = {
   'blur': true
 };
 
+/**
+ * Check if the event has been retargeted by comparing original `target`, and calculated `target`
+ * @param {Event} event
+ * @return {boolean} True if the original target and calculated target are the same
+ */
+function hasRetargeted(event) {
+  return event['__target'] !== event.target || event.__relatedTarget !== event.relatedTarget;
+}
+
+/**
+ *
+ * @param {Event} event
+ * @param {Node} node
+ * @param {string} phase
+ */
 function fireHandlers(event, node, phase) {
   var hs = node.__handlers && node.__handlers[event.type] && node.__handlers[event.type][phase];
   if (hs) {
     for (var i = 0, fn; fn = hs[i]; i++) {
-      if (event.target === event.relatedTarget) {
+      if (hasRetargeted(event) && event.target === event.relatedTarget) {
         return;
       }
       fn.call(node, event);
@@ -2456,14 +3639,14 @@ function findListener(wrappers, node, type, capture, once, passive) {
 }
 
 /**
- * Firefox can throw on accessing __eventWrappers inside of `removeEventListener` during a selenium run
- * Try/Catch accessing __eventWrappers to work around
+ * Firefox can throw on accessing eventWrappers inside of `removeEventListener` during a selenium run
+ * Try/Catch accessing eventWrappers to work around
  * https://bugzilla.mozilla.org/show_bug.cgi?id=1353074
  */
 function getEventWrappers(eventLike) {
   var wrappers = null;
   try {
-    wrappers = eventLike.__eventWrappers;
+    wrappers = eventLike[eventWrappersName];
   } catch (e) {} // eslint-disable-line no-empty
   return wrappers;
 }
@@ -2476,6 +3659,18 @@ function addEventListener$1(type, fnOrObj, optionsOrCapture) {
     return;
   }
 
+  var handlerType = typeof fnOrObj === 'undefined' ? 'undefined' : _typeof(fnOrObj);
+
+  // bail if `fnOrObj` is not a function, not an object
+  if (handlerType !== 'function' && handlerType !== 'object') {
+    return;
+  }
+
+  // bail if `fnOrObj` is an object without a `handleEvent` method
+  if (handlerType === 'object' && (!fnOrObj.handleEvent || typeof fnOrObj.handleEvent !== 'function')) {
+    return;
+  }
+
   // The callback `fn` might be used for multiple nodes/events. Since we generate
   // a wrapper function, we need to keep track of it when we remove the listener.
   // It's more efficient to store the node/type/options information as Array in
@@ -2485,7 +3680,7 @@ function addEventListener$1(type, fnOrObj, optionsOrCapture) {
   var capture = void 0,
       once = void 0,
       passive = void 0;
-  if ((typeof optionsOrCapture === 'undefined' ? 'undefined' : _typeof(optionsOrCapture)) === 'object') {
+  if (optionsOrCapture && (typeof optionsOrCapture === 'undefined' ? 'undefined' : _typeof(optionsOrCapture)) === 'object') {
     capture = Boolean(optionsOrCapture.capture);
     once = Boolean(optionsOrCapture.once);
     passive = Boolean(optionsOrCapture.passive);
@@ -2499,18 +3694,19 @@ function addEventListener$1(type, fnOrObj, optionsOrCapture) {
   // will be set to shadyroot for event listener
   var target = optionsOrCapture && optionsOrCapture.__shadyTarget || this;
 
-  var wrappers = fnOrObj.__eventWrappers;
+  var wrappers = fnOrObj[eventWrappersName];
   if (wrappers) {
     // Stop if the wrapper function has already been created.
     if (findListener(wrappers, target, type, capture, once, passive) > -1) {
       return;
     }
   } else {
-    fnOrObj.__eventWrappers = [];
+    fnOrObj[eventWrappersName] = [];
   }
 
   /**
    * @this {HTMLElement}
+   * @param {Event} e
    */
   var wrapperFn = function wrapperFn(e) {
     // Support `once` option.
@@ -2534,17 +3730,17 @@ function addEventListener$1(type, fnOrObj, optionsOrCapture) {
     // 1. the event is not composed and the current node is not in the same root as the target
     // 2. when bubbling, if after retargeting, relatedTarget and target point to the same node
     if (e.composed || e.composedPath().indexOf(target) > -1) {
-      if (e.target === e.relatedTarget) {
+      if (hasRetargeted(e) && e.target === e.relatedTarget) {
         if (e.eventPhase === Event.BUBBLING_PHASE) {
           e.stopImmediatePropagation();
         }
         return;
       }
       // prevent non-bubbling events from triggering bubbling handlers on shadowroot, but only if not in capture phase
-      if (e.eventPhase !== Event.CAPTURING_PHASE && !e.bubbles && e.target !== target) {
+      if (e.eventPhase !== Event.CAPTURING_PHASE && !e.bubbles && e.target !== target && !(target instanceof Window)) {
         return;
       }
-      var ret = (typeof fnOrObj === 'undefined' ? 'undefined' : _typeof(fnOrObj)) === 'object' && fnOrObj.handleEvent ? fnOrObj.handleEvent(e) : fnOrObj.call(target, e);
+      var ret = handlerType === 'function' ? fnOrObj.call(target, e) : fnOrObj.handleEvent && fnOrObj.handleEvent(e);
       if (target !== this) {
         // replace the "correct" `currentTarget`
         if (lastCurrentTargetDesc) {
@@ -2558,7 +3754,7 @@ function addEventListener$1(type, fnOrObj, optionsOrCapture) {
     }
   };
   // Store the wrapper information.
-  fnOrObj.__eventWrappers.push({
+  fnOrObj[eventWrappersName].push({
     node: this,
     type: type,
     capture: capture,
@@ -2589,7 +3785,7 @@ function removeEventListener$1(type, fnOrObj, optionsOrCapture) {
   var capture = void 0,
       once = void 0,
       passive = void 0;
-  if ((typeof optionsOrCapture === 'undefined' ? 'undefined' : _typeof(optionsOrCapture)) === 'object') {
+  if (optionsOrCapture && (typeof optionsOrCapture === 'undefined' ? 'undefined' : _typeof(optionsOrCapture)) === 'object') {
     capture = Boolean(optionsOrCapture.capture);
     once = Boolean(optionsOrCapture.once);
     passive = Boolean(optionsOrCapture.passive);
@@ -2608,7 +3804,7 @@ function removeEventListener$1(type, fnOrObj, optionsOrCapture) {
       wrapperFn = wrappers.splice(idx, 1)[0].wrapperFn;
       // Cleanup.
       if (!wrappers.length) {
-        fnOrObj.__eventWrappers = undefined;
+        fnOrObj[eventWrappersName] = undefined;
       }
     }
   }
@@ -2941,7 +4137,8 @@ ShadyRoot.prototype._init = function (host, options) {
   this._renderPending = false;
   this._hasRendered = false;
   this._slotList = [];
-  this._slotMap = null;
+  this._slotMap = {};
+  this.__pendingSlots = [];
   // fast path initial render: remove existing physical dom.
   var c$ = childNodes(host);
   for (var i = 0, l = c$.length; i < l; i++) {
@@ -2963,7 +4160,7 @@ ShadyRoot.prototype._asyncRender = function () {
 
 // returns the oldest renderPending ancestor root.
 ShadyRoot.prototype._getRenderRoot = function () {
-  var renderRoot = this;
+  var renderRoot = void 0;
   var root = this;
   while (root) {
     if (root._renderPending) {
@@ -2990,8 +4187,9 @@ ShadyRoot.prototype._rendererForHost = function () {
 };
 
 ShadyRoot.prototype._render = function () {
-  if (this._renderPending) {
-    this._getRenderRoot()['_renderRoot']();
+  var root = this._getRenderRoot();
+  if (root) {
+    root['_renderRoot']();
   }
 };
 
@@ -3004,6 +4202,7 @@ ShadyRoot.prototype['_renderRoot'] = function () {
 };
 
 ShadyRoot.prototype._distribute = function () {
+  this._validateSlots();
   // capture # of previously assigned nodes to help determine if dirty.
   for (var i = 0, slot; i < this._slotList.length; i++) {
     slot = this._slotList[i];
@@ -3111,12 +4310,15 @@ ShadyRoot.prototype._clearSlotAssignedNodes = function (slot) {
   }
 };
 
-ShadyRoot.prototype._addAssignedToFlattenedNodes = function (flattened, asssigned) {
-  for (var i = 0, n; i < asssigned.length && (n = asssigned[i]); i++) {
+ShadyRoot.prototype._addAssignedToFlattenedNodes = function (flattened, assigned) {
+  for (var i = 0, n; i < assigned.length && (n = assigned[i]); i++) {
     if (n.localName == 'slot') {
-      this._addAssignedToFlattenedNodes(flattened, n.__shady.assignedNodes);
+      var nestedAssigned = n.__shady.assignedNodes;
+      if (nestedAssigned && nestedAssigned.length) {
+        this._addAssignedToFlattenedNodes(flattened, nestedAssigned);
+      }
     } else {
-      flattened.push(asssigned[i]);
+      flattened.push(assigned[i]);
     }
   }
 };
@@ -3214,14 +4416,25 @@ ShadyRoot.prototype._updateChildNodes = function (container, children$$1) {
   }
 };
 
+ShadyRoot.prototype._addSlots = function (slots) {
+  var _pendingSlots;
+
+  (_pendingSlots = this.__pendingSlots).push.apply(_pendingSlots, toConsumableArray(slots));
+};
+
+ShadyRoot.prototype._validateSlots = function () {
+  if (this.__pendingSlots.length) {
+    this._mapSlots(this.__pendingSlots);
+    this.__pendingSlots = [];
+  }
+};
+
 /**
  * Adds the given slots. Slots are maintained in an dom-ordered list.
  * In addition a map of name to slot is updated.
  */
-ShadyRoot.prototype._addSlots = function (slots) {
+ShadyRoot.prototype._mapSlots = function (slots) {
   var slotNamesToSort = void 0;
-  this._slotMap = this._slotMap || {};
-  this._slotList = this._slotList || [];
   for (var i = 0; i < slots.length; i++) {
     var slot = slots[i];
     // ensure insertionPoints's and their parents have logical dom info.
@@ -3285,25 +4498,14 @@ function ancestorList(node) {
   return ancestors;
 }
 
-// NOTE: could be used to help polyfill `document.contains`.
-function contains(container, node) {
-  while (node) {
-    if (node == container) {
-      return true;
-    }
-    node = node.parentNode;
-  }
-}
-
 /**
  * Removes from tracked slot data any slots contained within `container` and
  * then updates the tracked data (_slotList and _slotMap).
  * Any removed slots also have their `assignedNodes` removed from comopsed dom.
  */
 ShadyRoot.prototype._removeContainedSlots = function (container) {
+  this._validateSlots();
   var didRemove = void 0;
-  this._slotMap = this._slotMap || {};
-  this._slotList = this._slotList || [];
   var map = this._slotMap;
   for (var n in map) {
     var slots = map[n];
@@ -3358,6 +4560,7 @@ ShadyRoot.prototype._removeFlattenedNodes = function (slot) {
 };
 
 ShadyRoot.prototype._hasInsertionPoint = function () {
+  this._validateSlots();
   return Boolean(this._slotList.length);
 };
 
@@ -3473,6 +4676,9 @@ var nodeMixin = {
   getRootNode: function getRootNode$$1(options) {
     return getRootNode(this, options);
   },
+  contains: function contains$$1(node) {
+    return contains(this, node);
+  },
 
 
   /**
@@ -3481,10 +4687,12 @@ var nodeMixin = {
   get isConnected() {
     // Fast path for distributed nodes.
     var ownerDocument = this.ownerDocument;
-    if (ownerDocument && ownerDocument.contains && ownerDocument.contains(this)) return true;
-    var ownerDocumentElement = ownerDocument.documentElement;
-    if (ownerDocumentElement && ownerDocumentElement.contains && ownerDocumentElement.contains(this)) return true;
-
+    if (hasDocumentContains && contains$1.call(ownerDocument, this)) {
+      return true;
+    }
+    if (ownerDocument.documentElement && contains$1.call(ownerDocument.documentElement, this)) {
+      return true;
+    }
     var node = this;
     while (node && !(node instanceof Document)) {
       node = node.parentNode || (node instanceof ShadyRoot ? /** @type {ShadowRoot} */node.host : undefined);
@@ -3496,7 +4704,7 @@ var nodeMixin = {
    * @this {Node}
    */
   dispatchEvent: function dispatchEvent$$1(event) {
-    flush();
+    flush$1();
     return dispatchEvent.call(this, event);
   }
 };
@@ -3729,7 +4937,7 @@ if (settings.inUse) {
     },
     'isShadyRoot': isShadyRoot,
     'enqueue': enqueue,
-    'flush': flush,
+    'flush': flush$1,
     'settings': settings,
     'filterMutations': filterMutations,
     'observeChildren': observeChildren,
@@ -4106,11 +5314,14 @@ var CustomElementInternals = function () {
           // the `import` property, specifically this is *not* a Document.
           var importNode = /** @type {?Node} */element.import;
 
-          if (importNode instanceof Node && importNode.readyState === 'complete') {
+          if (importNode instanceof Node) {
             importNode.__CE_isImportDocument = true;
-
             // Connected links are associated with the registry.
             importNode.__CE_hasRegistry = true;
+          }
+
+          if (importNode && importNode.readyState === 'complete') {
+            importNode.__CE_documentLoadHandled = true;
           } else {
             // If this link's import root is not available, its contents can't be
             // walked. Wait for 'load' and walk it when it's ready.
@@ -4120,20 +5331,15 @@ var CustomElementInternals = function () {
               if (importNode.__CE_documentLoadHandled) return;
               importNode.__CE_documentLoadHandled = true;
 
-              importNode.__CE_isImportDocument = true;
-
-              // Connected links are associated with the registry.
-              importNode.__CE_hasRegistry = true;
-
               // Clone the `visitedImports` set that was populated sync during
               // the `patchAndUpgradeTree` call that caused this 'load' handler to
               // be added. Then, remove *this* link's import node so that we can
               // walk that import again, even if it was partially walked later
               // during the same `patchAndUpgradeTree` call.
               var clonedVisitedImports = new Set(visitedImports);
-              visitedImports.delete(importNode);
+              clonedVisitedImports.delete(importNode);
 
-              _this2.patchAndUpgradeTree(importNode, { visitedImports: visitedImports, upgrade: upgrade });
+              _this2.patchAndUpgradeTree(importNode, { visitedImports: clonedVisitedImports, upgrade: upgrade });
             });
           }
         } else {
@@ -4165,6 +5371,19 @@ var CustomElementInternals = function () {
     value: function upgradeElement(element) {
       var currentState = element.__CE_state;
       if (currentState !== undefined) return;
+
+      // Prevent elements created in documents without a browsing context from
+      // upgrading.
+      //
+      // https://html.spec.whatwg.org/multipage/custom-elements.html#look-up-a-custom-element-definition
+      //   "If document does not have a browsing context, return null."
+      //
+      // https://html.spec.whatwg.org/multipage/window-object.html#dom-document-defaultview
+      //   "The defaultView IDL attribute of the Document interface, on getting,
+      //   must return this Document's browsing context's WindowProxy object, if
+      //   this Document has an associated browsing context, or null otherwise."
+      var ownerDocument = element.ownerDocument;
+      if (!ownerDocument.defaultView && !(ownerDocument.__CE_isImportDocument && ownerDocument.__CE_hasRegistry)) return;
 
       var definition = this.localNameToDefinition(element.localName);
       if (!definition) return;
@@ -4517,6 +5736,7 @@ var CustomElementRegistry = function () {
         constructionStack: []
       };
 
+      this._internals.setDefinition(localName, definition);
       this._pendingDefinitions.push(definition);
 
       // If we've already called the flush callback and it hasn't called back yet,
@@ -4540,39 +5760,58 @@ var CustomElementRegistry = function () {
       this._flushPending = false;
 
       var pendingDefinitions = this._pendingDefinitions;
-      /** @type {!Map<string, !Array<!Element>>} */
-      var localNameToUpgradableElements = new Map();
+
+      /**
+       * Unupgraded elements with definitions that were defined *before* the last
+       * flush, in document order.
+       * @type {!Array<!Element>}
+       */
+      var elementsWithStableDefinitions = [];
+
+      /**
+       * A map from `localName`s of definitions that were defined *after* the last
+       * flush to unupgraded elements matching that definition, in document order.
+       * @type {!Map<string, !Array<!Element>>}
+       */
+      var elementsWithPendingDefinitions = new Map();
       for (var i = 0; i < pendingDefinitions.length; i++) {
-        localNameToUpgradableElements.set(pendingDefinitions[i].localName, []);
+        elementsWithPendingDefinitions.set(pendingDefinitions[i].localName, []);
       }
 
       this._internals.patchAndUpgradeTree(document, {
         upgrade: function upgrade(element) {
-          // Attempt to upgrade using *non-pending* definitions.
-          _this2._internals.upgradeElement(element);
-
-          // If the element was upgraded, then no pending definition applies to it.
+          // Ignore the element if it has already upgraded or failed to upgrade.
           if (element.__CE_state !== undefined) return;
 
+          var localName = element.localName;
+
           // If there is an applicable pending definition for the element, add the
-          // element to the set of upgradable elements for that definition.
-          var upgradableElements = localNameToUpgradableElements.get(element.localName);
-          if (upgradableElements) {
-            upgradableElements.push(element);
+          // element to the list of elements to be upgraded with that definition.
+          var pendingElements = elementsWithPendingDefinitions.get(localName);
+          if (pendingElements) {
+            pendingElements.push(element);
+            // If there is *any other* applicable definition for the element, add it
+            // to the list of elements with stable definitions that need to be upgraded.
+          } else if (_this2._internals.localNameToDefinition(localName)) {
+            elementsWithStableDefinitions.push(element);
           }
         }
       });
 
+      // Upgrade elements with 'stable' definitions first.
+      for (var _i = 0; _i < elementsWithStableDefinitions.length; _i++) {
+        this._internals.upgradeElement(elementsWithStableDefinitions[_i]);
+      }
+
+      // Upgrade elements with 'pending' definitions in the order they were defined.
       while (pendingDefinitions.length > 0) {
         var definition = pendingDefinitions.shift();
         var localName = definition.localName;
 
-        this._internals.setDefinition(localName, definition);
-
         // Attempt to upgrade all applicable elements.
-        var upgradableElements = localNameToUpgradableElements.get(definition.localName);
-        for (var _i = 0; _i < upgradableElements.length; _i++) {
-          this._internals.upgradeElement(upgradableElements[_i]);
+        var pendingUpgradableElements = elementsWithPendingDefinitions.get(definition.localName);
+        for (var _i2 = 0; _i2 < pendingUpgradableElements.length; _i2++) {
+          this._internals.upgradeElement(pendingUpgradableElements[_i2]);
         }
 
         // Resolve any promises created by `whenDefined` for the definition.
@@ -4658,6 +5897,8 @@ var Native = {
   Document_importNode: window.Document.prototype.importNode,
   Document_prepend: window.Document.prototype['prepend'],
   Document_append: window.Document.prototype['append'],
+  DocumentFragment_prepend: window.DocumentFragment.prototype['prepend'],
+  DocumentFragment_append: window.DocumentFragment.prototype['append'],
   Node_cloneNode: window.Node.prototype.cloneNode,
   Node_appendChild: window.Node.prototype.appendChild,
   Node_insertBefore: window.Node.prototype.insertBefore,
@@ -4754,64 +5995,67 @@ var PatchHTMLElement = function (internals) {
  */
 var PatchParentNode = function (internals, destination, builtIn) {
   /**
-   * @param {...(!Node|string)} nodes
+   * @param {!function(...(!Node|string))} builtInMethod
+   * @return {!function(...(!Node|string))}
    */
-  destination['prepend'] = function () {
-    for (var _len = arguments.length, nodes = Array(_len), _key = 0; _key < _len; _key++) {
-      nodes[_key] = arguments[_key];
-    }
+  function appendPrependPatch(builtInMethod) {
+    return function () {
+      /**
+       * A copy of `nodes`, with any DocumentFragment replaced by its children.
+       * @type {!Array<!Node>}
+       */
+      var flattenedNodes = [];
 
-    // TODO: Fix this for when one of `nodes` is a DocumentFragment!
-    var connectedBefore = /** @type {!Array<!Node>} */nodes.filter(function (node) {
-      // DocumentFragments are not connected and will not be added to the list.
-      return node instanceof Node && isConnected(node);
-    });
+      /**
+       * Elements in `nodes` that were connected before this call.
+       * @type {!Array<!Node>}
+       */
+      var connectedElements = [];
 
-    builtIn.prepend.apply(this, nodes);
+      for (var _len = arguments.length, nodes = Array(_len), _key = 0; _key < _len; _key++) {
+        nodes[_key] = arguments[_key];
+      }
 
-    for (var i = 0; i < connectedBefore.length; i++) {
-      internals.disconnectTree(connectedBefore[i]);
-    }
+      for (var i = 0; i < nodes.length; i++) {
+        var node = nodes[i];
 
-    if (isConnected(this)) {
-      for (var _i = 0; _i < nodes.length; _i++) {
-        var node = nodes[_i];
-        if (node instanceof Element) {
-          internals.connectTree(node);
+        if (node instanceof Element && isConnected(node)) {
+          connectedElements.push(node);
+        }
+
+        if (node instanceof DocumentFragment) {
+          for (var child = node.firstChild; child; child = child.nextSibling) {
+            flattenedNodes.push(child);
+          }
+        } else {
+          flattenedNodes.push(node);
         }
       }
-    }
-  };
 
-  /**
-   * @param {...(!Node|string)} nodes
-   */
-  destination['append'] = function () {
-    for (var _len2 = arguments.length, nodes = Array(_len2), _key2 = 0; _key2 < _len2; _key2++) {
-      nodes[_key2] = arguments[_key2];
-    }
+      builtInMethod.apply(this, nodes);
 
-    // TODO: Fix this for when one of `nodes` is a DocumentFragment!
-    var connectedBefore = /** @type {!Array<!Node>} */nodes.filter(function (node) {
-      // DocumentFragments are not connected and will not be added to the list.
-      return node instanceof Node && isConnected(node);
-    });
+      for (var _i = 0; _i < connectedElements.length; _i++) {
+        internals.disconnectTree(connectedElements[_i]);
+      }
 
-    builtIn.append.apply(this, nodes);
-
-    for (var i = 0; i < connectedBefore.length; i++) {
-      internals.disconnectTree(connectedBefore[i]);
-    }
-
-    if (isConnected(this)) {
-      for (var _i2 = 0; _i2 < nodes.length; _i2++) {
-        var node = nodes[_i2];
-        if (node instanceof Element) {
-          internals.connectTree(node);
+      if (isConnected(this)) {
+        for (var _i2 = 0; _i2 < flattenedNodes.length; _i2++) {
+          var _node = flattenedNodes[_i2];
+          if (_node instanceof Element) {
+            internals.connectTree(_node);
+          }
         }
       }
-    }
-  };
+    };
+  }
+
+  if (builtIn.prepend !== undefined) {
+    setPropertyUnchecked(destination, 'prepend', appendPrependPatch(builtIn.prepend));
+  }
+
+  if (builtIn.append !== undefined) {
+    setPropertyUnchecked(destination, 'append', appendPrependPatch(builtIn.append));
+  }
 };
 
 /**
@@ -4884,6 +6128,16 @@ var PatchDocument = function (internals) {
   PatchParentNode(internals, Document.prototype, {
     prepend: Native.Document_prepend,
     append: Native.Document_append
+  });
+};
+
+/**
+ * @param {!CustomElementInternals} internals
+ */
+var PatchDocumentFragment = function (internals) {
+  PatchParentNode(internals, DocumentFragment.prototype, {
+    prepend: Native.DocumentFragment_prepend,
+    append: Native.DocumentFragment_append
   });
 };
 
@@ -5125,107 +6379,137 @@ var PatchNode = function (internals) {
  */
 var PatchChildNode = function (internals, destination, builtIn) {
   /**
-   * @param {...(!Node|string)} nodes
+   * @param {!function(...(!Node|string))} builtInMethod
+   * @return {!function(...(!Node|string))}
    */
-  destination['before'] = function () {
-    for (var _len = arguments.length, nodes = Array(_len), _key = 0; _key < _len; _key++) {
-      nodes[_key] = arguments[_key];
-    }
+  function beforeAfterPatch(builtInMethod) {
+    return function () {
+      /**
+       * A copy of `nodes`, with any DocumentFragment replaced by its children.
+       * @type {!Array<!Node>}
+       */
+      var flattenedNodes = [];
 
-    // TODO: Fix this for when one of `nodes` is a DocumentFragment!
-    var connectedBefore = /** @type {!Array<!Node>} */nodes.filter(function (node) {
-      // DocumentFragments are not connected and will not be added to the list.
-      return node instanceof Node && isConnected(node);
-    });
+      /**
+       * Elements in `nodes` that were connected before this call.
+       * @type {!Array<!Node>}
+       */
+      var connectedElements = [];
 
-    builtIn.before.apply(this, nodes);
+      for (var _len = arguments.length, nodes = Array(_len), _key = 0; _key < _len; _key++) {
+        nodes[_key] = arguments[_key];
+      }
 
-    for (var i = 0; i < connectedBefore.length; i++) {
-      internals.disconnectTree(connectedBefore[i]);
-    }
+      for (var i = 0; i < nodes.length; i++) {
+        var node = nodes[i];
 
-    if (isConnected(this)) {
-      for (var _i = 0; _i < nodes.length; _i++) {
-        var node = nodes[_i];
-        if (node instanceof Element) {
-          internals.connectTree(node);
+        if (node instanceof Element && isConnected(node)) {
+          connectedElements.push(node);
+        }
+
+        if (node instanceof DocumentFragment) {
+          for (var child = node.firstChild; child; child = child.nextSibling) {
+            flattenedNodes.push(child);
+          }
+        } else {
+          flattenedNodes.push(node);
         }
       }
-    }
-  };
 
-  /**
-   * @param {...(!Node|string)} nodes
-   */
-  destination['after'] = function () {
-    for (var _len2 = arguments.length, nodes = Array(_len2), _key2 = 0; _key2 < _len2; _key2++) {
-      nodes[_key2] = arguments[_key2];
-    }
+      builtInMethod.apply(this, nodes);
 
-    // TODO: Fix this for when one of `nodes` is a DocumentFragment!
-    var connectedBefore = /** @type {!Array<!Node>} */nodes.filter(function (node) {
-      // DocumentFragments are not connected and will not be added to the list.
-      return node instanceof Node && isConnected(node);
-    });
+      for (var _i = 0; _i < connectedElements.length; _i++) {
+        internals.disconnectTree(connectedElements[_i]);
+      }
 
-    builtIn.after.apply(this, nodes);
-
-    for (var i = 0; i < connectedBefore.length; i++) {
-      internals.disconnectTree(connectedBefore[i]);
-    }
-
-    if (isConnected(this)) {
-      for (var _i2 = 0; _i2 < nodes.length; _i2++) {
-        var node = nodes[_i2];
-        if (node instanceof Element) {
-          internals.connectTree(node);
+      if (isConnected(this)) {
+        for (var _i2 = 0; _i2 < flattenedNodes.length; _i2++) {
+          var _node = flattenedNodes[_i2];
+          if (_node instanceof Element) {
+            internals.connectTree(_node);
+          }
         }
       }
-    }
-  };
+    };
+  }
 
-  /**
-   * @param {...(!Node|string)} nodes
-   */
-  destination['replaceWith'] = function () {
-    for (var _len3 = arguments.length, nodes = Array(_len3), _key3 = 0; _key3 < _len3; _key3++) {
-      nodes[_key3] = arguments[_key3];
-    }
+  if (builtIn.before !== undefined) {
+    setPropertyUnchecked(destination, 'before', beforeAfterPatch(builtIn.before));
+  }
 
-    // TODO: Fix this for when one of `nodes` is a DocumentFragment!
-    var connectedBefore = /** @type {!Array<!Node>} */nodes.filter(function (node) {
-      // DocumentFragments are not connected and will not be added to the list.
-      return node instanceof Node && isConnected(node);
-    });
+  if (builtIn.before !== undefined) {
+    setPropertyUnchecked(destination, 'after', beforeAfterPatch(builtIn.after));
+  }
 
-    var wasConnected = isConnected(this);
+  if (builtIn.replaceWith !== undefined) {
+    setPropertyUnchecked(destination, 'replaceWith',
+    /**
+     * @param {...(!Node|string)} nodes
+     */
+    function () {
+      /**
+       * A copy of `nodes`, with any DocumentFragment replaced by its children.
+       * @type {!Array<!Node>}
+       */
+      var flattenedNodes = [];
 
-    builtIn.replaceWith.apply(this, nodes);
+      /**
+       * Elements in `nodes` that were connected before this call.
+       * @type {!Array<!Node>}
+       */
+      var connectedElements = [];
 
-    for (var i = 0; i < connectedBefore.length; i++) {
-      internals.disconnectTree(connectedBefore[i]);
-    }
+      for (var _len2 = arguments.length, nodes = Array(_len2), _key2 = 0; _key2 < _len2; _key2++) {
+        nodes[_key2] = arguments[_key2];
+      }
 
-    if (wasConnected) {
-      internals.disconnectTree(this);
-      for (var _i3 = 0; _i3 < nodes.length; _i3++) {
-        var node = nodes[_i3];
-        if (node instanceof Element) {
-          internals.connectTree(node);
+      for (var i = 0; i < nodes.length; i++) {
+        var node = nodes[i];
+
+        if (node instanceof Element && isConnected(node)) {
+          connectedElements.push(node);
+        }
+
+        if (node instanceof DocumentFragment) {
+          for (var child = node.firstChild; child; child = child.nextSibling) {
+            flattenedNodes.push(child);
+          }
+        } else {
+          flattenedNodes.push(node);
         }
       }
-    }
-  };
 
-  destination['remove'] = function () {
-    var wasConnected = isConnected(this);
+      var wasConnected = isConnected(this);
 
-    builtIn.remove.call(this);
+      builtIn.replaceWith.apply(this, nodes);
 
-    if (wasConnected) {
-      internals.disconnectTree(this);
-    }
-  };
+      for (var _i3 = 0; _i3 < connectedElements.length; _i3++) {
+        internals.disconnectTree(connectedElements[_i3]);
+      }
+
+      if (wasConnected) {
+        internals.disconnectTree(this);
+        for (var _i4 = 0; _i4 < flattenedNodes.length; _i4++) {
+          var _node2 = flattenedNodes[_i4];
+          if (_node2 instanceof Element) {
+            internals.connectTree(_node2);
+          }
+        }
+      }
+    });
+  }
+
+  if (builtIn.remove !== undefined) {
+    setPropertyUnchecked(destination, 'remove', function () {
+      var wasConnected = isConnected(this);
+
+      builtIn.remove.call(this);
+
+      if (wasConnected) {
+        internals.disconnectTree(this);
+      }
+    });
+  }
 };
 
 /**
@@ -5244,8 +6528,6 @@ var PatchElement = function (internals) {
       this.__CE_shadowRoot = shadowRoot;
       return shadowRoot;
     });
-  } else {
-    console.warn('Custom Elements: `Element#attachShadow` was not patched.');
   }
 
   function patch_innerHTML(destination, baseDescriptor) {
@@ -5303,9 +6585,6 @@ var PatchElement = function (internals) {
     patch_innerHTML(HTMLElement.prototype, Native.HTMLElement_innerHTML);
   } else {
 
-    /** @type {HTMLDivElement} */
-    var rawDiv = Native.Document_createElement.call(document, 'div');
-
     internals.addPatch(function (element) {
       patch_innerHTML(element, {
         enumerable: true,
@@ -5323,15 +6602,20 @@ var PatchElement = function (internals) {
           // NOTE: re-route to `content` for `template` elements.
           // We need to do this because `template.appendChild` does not
           // route into `template.content`.
+          var isTemplate = this.localName === 'template';
           /** @type {!Node} */
-          var content = this.localName === 'template' ? /** @type {!HTMLTemplateElement} */this.content : this;
-          rawDiv.innerHTML = assignedValue;
+          var content = isTemplate ? /** @type {!HTMLTemplateElement} */
+          this.content : this;
+          /** @type {!Node} */
+          var rawElement = Native.Document_createElement.call(document, this.localName);
+          rawElement.innerHTML = assignedValue;
 
           while (content.childNodes.length > 0) {
             Native.Node_removeChild.call(content, content.childNodes[0]);
           }
-          while (rawDiv.childNodes.length > 0) {
-            Native.Node_appendChild.call(content, rawDiv.childNodes[0]);
+          var container = isTemplate ? rawElement.content : rawElement;
+          while (container.childNodes.length > 0) {
+            Native.Node_appendChild.call(content, container.childNodes[0]);
           }
         }
       });
@@ -5479,6 +6763,7 @@ if (!priorCustomElements || priorCustomElements['forcePolyfill'] || typeof prior
 
   PatchHTMLElement(internals);
   PatchDocument(internals);
+  PatchDocumentFragment(internals);
   PatchNode(internals);
   PatchElement(internals);
 
@@ -5775,7 +7060,9 @@ function calcCssVariables(settings) {
     // safari 9.1 has a recalc bug: https://bugs.webkit.org/show_bug.cgi?id=155782
     // However, shim css custom properties are only supported with ShadyDOM enabled,
     // so fall back on native if we do not detect ShadyDOM
-    nativeCssVariables = nativeShadow || Boolean(!navigator.userAgent.match('AppleWebKit/601') && window.CSS && CSS.supports && CSS.supports('box-shadow', '0 0 0 var(--foo)'));
+    // Edge 15: custom properties used in ::before and ::after will also be used in the parent element
+    // https://developer.microsoft.com/en-us/microsoft-edge/platform/issues/12414257/
+    nativeCssVariables = nativeShadow || Boolean(!navigator.userAgent.match(/AppleWebKit\/601|Edge\/15/) && window.CSS && CSS.supports && CSS.supports('box-shadow', '0 0 0 var(--foo)'));
   }
 }
 
@@ -5808,6 +7095,46 @@ var MEDIA_MATCH = /@media\s(.*)/;
 var BRACKETED = /\{[^}]*\}/g;
 var HOST_PREFIX = '(?:^|[^.#[:])';
 var HOST_SUFFIX = '($|[.:[\\s>+~])';
+
+/**
+@license
+Copyright (c) 2017 The Polymer Project Authors. All rights reserved.
+This code may only be used under the BSD style license found at http://polymer.github.io/LICENSE.txt
+The complete set of authors may be found at http://polymer.github.io/AUTHORS.txt
+The complete set of contributors may be found at http://polymer.github.io/CONTRIBUTORS.txt
+Code distributed by Google as part of the polymer project is also
+subject to an additional IP rights grant found at http://polymer.github.io/PATENTS.txt
+*/
+
+/** @type {!Set<string>} */
+
+var styleTextSet = new Set();
+
+var scopingAttribute = 'shady-unscoped';
+
+/**
+ * Add a specifically-marked style to the document directly, and only one copy of that style.
+ *
+ * @param {!HTMLStyleElement} style
+ * @return {undefined}
+ */
+function processUnscopedStyle(style) {
+  var text = style.textContent;
+  if (!styleTextSet.has(text)) {
+    styleTextSet.add(text);
+    var newStyle = style.cloneNode(true);
+    document.head.appendChild(newStyle);
+  }
+}
+
+/**
+ * Check if a style is supposed to be unscoped
+ * @param {!HTMLStyleElement} style
+ * @return {boolean} true if the style has the unscoping attribute
+ */
+function isUnscopedStyle(style) {
+  return style.hasAttribute(scopingAttribute);
+}
 
 /**
 @license
@@ -6067,6 +7394,29 @@ function getIsExtends(element) {
 }
 
 /**
+ * @param {Element|DocumentFragment} element
+ * @return {string}
+ */
+function gatherStyleText(element) {
+  /** @type {!Array<string>} */
+  var styleTextParts = [];
+  var styles = /** @type {!NodeList<!HTMLStyleElement>} */element.querySelectorAll('style');
+  for (var i = 0; i < styles.length; i++) {
+    var style = styles[i];
+    if (isUnscopedStyle(style)) {
+      if (!nativeShadow) {
+        processUnscopedStyle(style);
+        style.parentNode.removeChild(style);
+      }
+    } else {
+      styleTextParts.push(style.textContent);
+      style.parentNode.removeChild(style);
+    }
+  }
+  return styleTextParts.join('').trim();
+}
+
+/**
 @license
 Copyright (c) 2017 The Polymer Project Authors. All rights reserved.
 This code may only be used under the BSD style license found at http://polymer.github.io/LICENSE.txt
@@ -6263,6 +7613,24 @@ var StyleTransformer = function () {
 
     /**
      * @param {string} selector
+     * @return {string}
+     */
+
+  }, {
+    key: '_twiddleNthPlus',
+    value: function _twiddleNthPlus(selector) {
+      return selector.replace(NTH, function (m, type, inside) {
+        if (inside.indexOf('+') > -1) {
+          inside = inside.replace(/\+/g, '___');
+        } else if (inside.indexOf('___') > -1) {
+          inside = inside.replace(/___/g, '+');
+        }
+        return ':' + type + '(' + inside + ')';
+      });
+    }
+
+    /**
+     * @param {string} selector
      * @param {string} scope
      * @param {string=} hostScope
      */
@@ -6275,9 +7643,13 @@ var StyleTransformer = function () {
       var stop = false;
       selector = selector.trim();
       // Remove spaces inside of selectors like `:nth-of-type` because it confuses SIMPLE_SELECTOR_SEP
-      selector = selector.replace(NTH, function (m, type, inner) {
-        return ':' + type + '(' + inner.replace(/\s/g, '') + ')';
-      });
+      var isNth = NTH.test(selector);
+      if (isNth) {
+        selector = selector.replace(NTH, function (m, type, inner) {
+          return ':' + type + '(' + inner.replace(/\s/g, '') + ')';
+        });
+        selector = this._twiddleNthPlus(selector);
+      }
       selector = selector.replace(SLOTTED_START, HOST + ' $1');
       selector = selector.replace(SIMPLE_SELECTOR_SEP, function (m, c, s) {
         if (!stop) {
@@ -6288,6 +7660,9 @@ var StyleTransformer = function () {
         }
         return c + s;
       });
+      if (isNth) {
+        selector = this._twiddleNthPlus(selector);
+      }
       return selector;
     }
   }, {
@@ -7005,7 +8380,10 @@ var StyleProperties = function () {
   }, {
     key: '_scopeKeyframes',
     value: function _scopeKeyframes(rule, scopeId) {
-      rule.keyframesNameRx = new RegExp(rule['keyframesName'], 'g');
+      // Animation names are of the form [\w-], so ensure that the name regex does not partially apply
+      // to similarly named keyframe names by checking for a word boundary at the beginning and
+      // a non-word boundary or `-` at the end.
+      rule.keyframesNameRx = new RegExp('\\b' + rule['keyframesName'] + '(?!\\B|-)', 'g');
       rule.transformedKeyframesName = rule['keyframesName'] + '-' + scopeId;
       rule.transformedSelector = rule.transformedSelector || rule['selector'];
       rule['selector'] = rule.transformedSelector.replace(rule['keyframesName'], rule.transformedKeyframesName);
@@ -7278,7 +8656,7 @@ Code distributed by Google as part of the polymer project is also
 subject to an additional IP rights grant found at http://polymer.github.io/PATENTS.txt
 */
 
-var flush$1 = function flush() {};
+var flush$2 = function flush() {};
 
 /**
  * @param {HTMLElement} element
@@ -7336,6 +8714,11 @@ function handler(mxns) {
         }
         newScope = getIsExtends(host).is;
         if (currentScope === newScope) {
+          // make sure all the subtree elements are scoped correctly
+          var unscoped = window['ShadyDOM']['nativeMethods']['querySelectorAll'].call(n, ':not(.' + StyleTransformer$1.SCOPE_NAME + ')');
+          for (var j = 0; j < unscoped.length; j++) {
+            StyleTransformer$1.element(unscoped[j], currentScope);
+          }
           continue;
         }
         if (currentScope) {
@@ -7383,7 +8766,7 @@ if (!nativeShadow) {
     }
   }
 
-  flush$1 = function flush() {
+  flush$2 = function flush() {
     handler(observer.takeRecords());
   };
 }
@@ -7831,7 +9214,7 @@ var ScopingShim = function () {
   createClass(ScopingShim, [{
     key: 'flush',
     value: function flush$$1() {
-      flush$1();
+      flush$2();
     }
   }, {
     key: '_generateScopeSelector',
@@ -7852,14 +9235,7 @@ var ScopingShim = function () {
   }, {
     key: '_gatherStyles',
     value: function _gatherStyles(template) {
-      var styles = template.content.querySelectorAll('style');
-      var cssText = [];
-      for (var i = 0; i < styles.length; i++) {
-        var s = styles[i];
-        cssText.push(s.textContent);
-        s.parentNode.removeChild(s);
-      }
-      return cssText.join('').trim();
+      return gatherStyleText(template.content);
     }
   }, {
     key: '_getCssBuild',
@@ -8418,23 +9794,20 @@ if (CustomStyleInterface) {
  * subject to an additional IP rights grant found at http://polymer.github.io/PATENTS.txt
  */
 
-(function () {
-  'use strict';
-  // It's desireable to provide a default stylesheet
-  // that's convenient for styling unresolved elements, but
-  // it's cumbersome to have to include this manually in every page.
-  // It would make sense to put inside some HTMLImport but
-  // the HTMLImports polyfill does not allow loading of stylesheets
-  // that block rendering. Therefore this injection is tolerated here.
-  //
-  // NOTE: position: relative fixes IE's failure to inherit opacity
-  // when a child is not statically positioned.
+// It's desireable to provide a default stylesheet
+// that's convenient for styling unresolved elements, but
+// it's cumbersome to have to include this manually in every page.
+// It would make sense to put inside some HTMLImport but
+// the HTMLImports polyfill does not allow loading of stylesheets
+// that block rendering. Therefore this injection is tolerated here.
+//
+// NOTE: position: relative fixes IE's failure to inherit opacity
+// when a child is not statically positioned.
 
-  var style = document.createElement('style');
-  style.textContent = '' + 'body {' + 'transition: opacity ease-in 0.2s;' + ' } \n' + 'body[unresolved] {' + 'opacity: 0; display: block; overflow: hidden; position: relative;' + ' } \n';
-  var head = document.querySelector('head');
-  head.insertBefore(style, head.firstChild);
-})();
+var style = document.createElement('style');
+style.textContent = '' + 'body {' + 'transition: opacity ease-in 0.2s;' + ' } \n' + 'body[unresolved] {' + 'opacity: 0; display: block; overflow: hidden; position: relative;' + ' } \n';
+var head = document.querySelector('head');
+head.insertBefore(style, head.firstChild);
 
 /*
  *  @license
