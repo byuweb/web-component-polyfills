@@ -8,15 +8,15 @@
   "license": "Apache-2.0",
   "scripts": {
     "clean-dist": "del dist && make-dir dist",
-    "copy-all": "cpy node_modules/@webcomponents/webcomponentsjs/webcomponents-* dist/",
-    "copy-compat": "cpy dist/webcomponents-lite.js dist/ --rename web-component-polyfills.min.js && cpy dist/webcomponents-lite.js dist/ --rename web-component-polyfills.js",
+    "copy-all": "cpy --cwd=node_modules/@webcomponents/webcomponentsjs \"./webcomponents-*.js*\" \"./bundles/*.js*\" ../../../dist --parents",
+    "copy-compat": "cpy dist/webcomponents-bundle.js dist/ --rename web-component-polyfills.min.js && cpy dist/webcomponents-bundle.js dist/ --rename web-component-polyfills.js",
     "build": "npm run clean-dist && npm run copy-all && npm run copy-compat"
   },
   "dependencies": {
-    "@webcomponents/webcomponentsjs": "^1.0.7"
+    "@webcomponents/webcomponentsjs": "^2.0.0"
   },
   "devDependencies": {
-    "cpy-cli": "^1.0.1",
+    "cpy-cli": "^2.0.0",
     "del-cli": "^1.1.0",
     "make-dir-cli": "^1.0.0"
   }
